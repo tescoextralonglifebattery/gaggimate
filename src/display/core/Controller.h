@@ -1,7 +1,8 @@
 #ifndef CONTROLLER_H
 #define CONTROLLER_H
-
-#include "NimBLEClientController.h"
+//THOMASEDIT
+#include "lib/NimBLEComm/src/NimBLEClientController.h"
+//THOMASEDITEND
 #include "NimBLEComm.h"
 #include "PluginManager.h"
 #include "Settings.h"
