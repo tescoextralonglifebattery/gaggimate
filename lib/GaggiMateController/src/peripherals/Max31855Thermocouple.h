@@ -1,44 +1,36 @@
-#ifndef MAX31855THERMOCOUPLE_H
-#define MAX31855THERMOCOUPLE_H
+#ifndef MAX31855THERMOCOUPLE_STUB_H
+#define MAX31855THERMOCOUPLE_STUB_H
 
-#include "TemperatureSensor.h"
-#include <MAX31855.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
+#include "peripherals/TemperatureSensor.h" // Your base class
+#include <functional>                     // For std::function
+// No FreeRTOS includes needed if task is removed
+// No <MAX31855.h> needed if library is not used
 
-constexpr int MAX31855_UPDATE_INTERVAL = 250;
-constexpr int MAX31855_MAX_ERRORS = 20;
-constexpr double MAX_SAFE_TEMP = 170.0;
-
-using temperature_callback_t = std::function<void(float)>;
-using temperature_error_callback_t = std::function<void()>;
+// --- Type Aliases for Callbacks (kept for interface compatibility) ---
+using temp_sensor_update_callback_t = std::function<void(float temperature)>;
+using temp_sensor_error_callback_t = std::function<void()>;
 
 class Max31855Thermocouple : public TemperatureSensor {
-  public:
-    Max31855Thermocouple(int csPin, int misoPin, int sckPin, const temperature_callback_t &callback,
-                         const temperature_error_callback_t &error_callback);
+public:
+    Max31855Thermocouple(int csPin, int misoPin, int sckPin,
+                         const temp_sensor_update_callback_t &update_cb,
+                         const temp_sensor_error_callback_t &error_cb);
+    ~Max31855Thermocouple();
+
+    void setup(); // Removed 'override' as it was causing a build error
     float read() override;
     bool hasError() override;
 
-    void setup();
-    void loop();
+private:
+    // No task function needed for stub
+    // No MAX31855 library instance needed
 
-  private:
-    MAX31855 *max31855;
-    xTaskHandle taskHandle;
+    // Callbacks are kept for API compatibility but might not be used actively by the stub
+    temp_sensor_update_callback_t m_update_callback;
+    temp_sensor_error_callback_t m_error_callback;
 
-    float errors = .0f;
-    float temperature = .0f;
-
-    int csPin = 0;
-    int misoPin = 0;
-    int sckPin = 0;
-
-    temperature_callback_t callback;
-    temperature_error_callback_t error_callback;
-
-    const char *LOG_TAG = "Max31855Thermocouple";
-    static void monitorTask(void *arg);
+    // Logging
+    static const char* TAG_V2_STUB;
 };
 
-#endif // MAX31855THERMOCOUPLE_H
+#endif // MAX31855THERMOCOUPLE_STUB_H
