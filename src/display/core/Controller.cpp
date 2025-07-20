@@ -4,23 +4,29 @@
 #include <ctime>
 #include <display/config.h>
 #include <display/core/constants.h>
+#include <display/core/static_profiles.h>
 #include <display/core/zones.h>
 #include <display/plugins/BLEScalePlugin.h>
 #include <display/plugins/BoilerFillPlugin.h>
 #include <display/plugins/HomekitPlugin.h>
 #include <display/plugins/MQTTPlugin.h>
+#include <display/plugins/ShotHistoryPlugin.h>
 #include <display/plugins/SmartGrindPlugin.h>
 #include <display/plugins/WebUIPlugin.h>
 #include <display/plugins/mDNSPlugin.h>
+
+const String LOG_TAG = F("Controller");
 
 void Controller::setup() {
     mode = settings.getStartupMode();
 
     if (!SPIFFS.begin(true)) {
-        Serial.println("An Error has occurred while mounting LittleFS");
+        Serial.println(F("An Error has occurred while mounting SPIFFS"));
     }
 
     pluginManager = new PluginManager();
+    profileManager = new ProfileManager(SPIFFS, "/p", settings, pluginManager);
+    profileManager->setup();
     ui = new DefaultUI(this, pluginManager);
     if (settings.isHomekit())
         pluginManager->registerPlugin(new HomekitPlugin(settings.getWifiSsid(), settings.getWifiPassword()));
@@ -36,10 +42,22 @@ void Controller::setup() {
         pluginManager->registerPlugin(new MQTTPlugin());
     }
     pluginManager->registerPlugin(new WebUIPlugin());
+    pluginManager->registerPlugin(&ShotHistory);
     pluginManager->registerPlugin(&BLEScales);
     pluginManager->setup(this);
 
+    pluginManager->on("profiles:profile:save", [this](Event const &event) {
+        String id = event.getString("id");
+        if (id == profileManager->getSelectedProfile().id) {
+            this->handleProfileUpdate();
+        }
+    });
+
+    pluginManager->on("profiles:profile:select", [this](Event const &event) { this->handleProfileUpdate(); });
+
     ui->init();
+
+    xTaskCreatePinnedToCore(loopTask, "DefaultUI::loopControl", configMINIMAL_STACK_SIZE * 6, this, 1, &taskHandle, 1);
 }
 
 void Controller::onScreenReady() { screenReady = true; }
@@ -52,8 +70,10 @@ void Controller::connect() {
     lastPing = millis();
     pluginManager->trigger("controller:startup");
 
-    setupBluetooth();
     setupWifi();
+    setupBluetooth();
+    pluginManager->on("ota:update:start", [this](Event const &) { this->updating = true; });
+    pluginManager->on("ota:update:end", [this](Event const &) { this->updating = false; });
 
     updateLastAction();
     initialized = true;
@@ -61,10 +81,16 @@ void Controller::connect() {
 
 void Controller::setupBluetooth() {
     clientController.initClient();
-    clientController.registerSensorCallback([this](const float temp, const float pressure) {
-        onTempRead(temp);
-        pluginManager->trigger("boiler:pressure:change", "value", pressure);
-    });
+    clientController.registerSensorCallback(
+        [this](const float temp, const float pressure, const float puckFlow, const float pumpFlow) {
+            onTempRead(temp);
+            this->pressure = pressure;
+            this->currentPuckFlow = puckFlow;
+            this->currentPumpFlow = pumpFlow;
+            pluginManager->trigger("boiler:pressure:change", "value", pressure);
+            pluginManager->trigger("pump:puck-flow:change", "value", puckFlow);
+            pluginManager->trigger("pump:flow:change", "value", pumpFlow);
+        });
     clientController.registerBrewBtnCallback([this](const int brewButtonStatus) { handleBrewButton(brewButtonStatus); });
     clientController.registerSteamBtnCallback([this](const int steamButtonStatus) { handleSteamButton(steamButtonStatus); });
     clientController.registerRemoteErrorCallback([this](const int error) {
@@ -72,17 +98,22 @@ void Controller::setupBluetooth() {
             this->error = error;
             deactivate();
             setMode(MODE_STANDBY);
-            pluginManager->trigger("controller:error");
+            pluginManager->trigger(F("controller:error"));
+            ESP_LOGE(LOG_TAG, "Received error %d", error);
         }
-        ESP_LOGE("Controller", "Received error %d", error);
     });
     clientController.registerAutotuneResultCallback([this](const float Kp, const float Ki, const float Kd) {
-        ESP_LOGI("Controller", "Received new autotune values: %.3f, %.3f, %.3f", Kp, Ki, Kd);
+        ESP_LOGI(LOG_TAG, "Received new autotune values: %.3f, %.3f, %.3f", Kp, Ki, Kd);
         char pid[30];
         snprintf(pid, sizeof(pid), "%.3f,%.3f,%.3f", Kp, Ki, Kd);
         settings.setPid(String(pid));
         pluginManager->trigger("controller:autotune:result");
         autotuning = false;
+    });
+    clientController.registerVolumetricMeasurementCallback([this](const float value) {
+        if (!volumetricOverride) {
+            onVolumetricMeasurement(value, VolumetricMeasurementSource::FLOW_ESTIMATION);
+        }
     });
     pluginManager->trigger("controller:bluetooth:init");
 }
@@ -111,6 +142,7 @@ void Controller::setupWifi() {
         WiFi.mode(WIFI_STA);
         WiFi.begin(settings.getWifiSsid(), settings.getWifiPassword());
         WiFi.setTxPower(WIFI_POWER_19_5dBm);
+        WiFi.setAutoReconnect(true);
         for (int attempts = 0; attempts < WIFI_CONNECT_ATTEMPTS; attempts++) {
             if (WiFi.status() == WL_CONNECTED) {
                 break;
@@ -118,16 +150,21 @@ void Controller::setupWifi() {
             delay(500);
             Serial.print(".");
         }
+        Serial.println("");
         if (WiFi.status() == WL_CONNECTED) {
-            Serial.println("");
-            Serial.print("Connected to ");
-            Serial.println(settings.getWifiSsid());
-            Serial.print("IP address: ");
-            Serial.println(WiFi.localIP());
-
-            configTzTime(resolve_timezone(settings.getTimezone()), NTP_SERVER);
+            ESP_LOGI(LOG_TAG, "Connected to %s with IP address %s", settings.getWifiSsid().c_str(),
+                     WiFi.localIP().toString().c_str());
+            WiFi.onEvent([this](WiFiEvent_t, WiFiEventInfo_t) { pluginManager->trigger("controller:wifi:connect", "AP", 0); },
+                         WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
+            WiFi.onEvent(
+                [this](WiFiEvent_t, WiFiEventInfo_t info) {
+                    ESP_LOGI(LOG_TAG, "Lost WiFi connection. Reason: %d", info.wifi_sta_disconnected.reason);
+                    pluginManager->trigger("controller:wifi:disconnect");
+                },
+                WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
         } else {
             WiFi.disconnect(true, true);
+            ESP_LOGI(LOG_TAG, "Timed out while connecting to WiFi");
             Serial.println("Timed out while connecting to WiFi");
         }
     }
@@ -137,11 +174,7 @@ void Controller::setupWifi() {
         WiFi.softAPConfig(WIFI_AP_IP, WIFI_AP_IP, WIFI_SUBNET_MASK);
         WiFi.softAP(WIFI_AP_SSID);
         WiFi.setTxPower(WIFI_POWER_19_5dBm);
-        Serial.println("Started in AP mode");
-        Serial.print("Connect to:");
-        Serial.println(WIFI_AP_SSID);
-        Serial.print("IP address: ");
-        Serial.println(WiFi.localIP());
+        ESP_LOGI(LOG_TAG, "Started WiFi AP %s", WIFI_AP_SSID);
     }
 
     pluginManager->on("ota:update:start", [this](Event const &) { this->updating = true; });
@@ -166,8 +199,9 @@ void Controller::loop() {
             if (settings.getStartupMode() == MODE_STANDBY)
                 activateStandby();
 
-            ESP_LOGI("Controller","setting pressure scale to %.2f\n",settings.getPressureScaling());
+            ESP_LOGI(LOG_TAG, "setting pressure scale to %.2f\n", settings.getPressureScaling());
             setPressureScale();
+            clientController.sendPidSettings(settings.getPid());
 
             pluginManager->trigger("controller:ready");
         }
@@ -184,12 +218,21 @@ void Controller::loop() {
     }
 
     if (now - lastProgress > PROGRESS_INTERVAL) {
+        // Check if steam is ready
+        if (mode == MODE_STEAM && !steamReady && currentTemp + 5 > getTargetTemp()) {
+            activate();
+            steamReady = true;
+        }
+
+        // Handle current process
         if (currentProcess != nullptr) {
             currentProcess->progress();
             if (!isActive()) {
                 deactivate();
             }
         }
+
+        // Handle last process - Calculate auto delay
         if (lastProcess != nullptr && !lastProcess->isComplete()) {
             lastProcess->progress();
         }
@@ -207,8 +250,6 @@ void Controller::loop() {
                 }
             }
         }
-        clientController.sendPidSettings(settings.getPid());
-        updateControl();
         lastProgress = now;
     }
 
@@ -218,11 +259,25 @@ void Controller::loop() {
         activateStandby();
 }
 
+void Controller::loopControl() {
+    if (initialized) {
+        updateControl();
+    }
+}
+
 bool Controller::isUpdating() const { return updating; }
 
 bool Controller::isAutotuning() const { return autotuning; }
 
 bool Controller::isReady() const { return !isUpdating() && !isErrorState() && !isAutotuning(); }
+
+bool Controller::isVolumetricAvailable() const {
+#ifdef NIGHTLY_BUILD
+    return volumetricOverride || systemInfo.capabilities.dimming;
+#else
+    return volumetricOverride;
+#endif
+}
 
 void Controller::autotune(int testTime, int samples) {
     if (isActive() || !isReady()) {
@@ -241,19 +296,15 @@ void Controller::startProcess(Process *process) {
         return;
     processCompleted = false;
     this->currentProcess = process;
-    updateControl();
+    pluginManager->trigger("controller:process:start");
     updateLastAction();
 }
 
 int Controller::getTargetTemp() {
-    if (isAutotuning()) {
-        return settings.getTargetBrewTemp();
-    }
-
     switch (mode) {
     case MODE_BREW:
     case MODE_GRIND:
-        return settings.getTargetBrewTemp();
+        return profileManager->getSelectedProfile().temperature;
     case MODE_STEAM:
         return settings.getTargetSteamTemp();
     case MODE_WATER:
@@ -268,7 +319,7 @@ void Controller::setTargetTemp(int temperature) {
     switch (mode) {
     case MODE_BREW:
     case MODE_GRIND:
-        settings.setTargetBrewTemp(temperature);
+        // Update current profile
         break;
     case MODE_STEAM:
         settings.setTargetSteamTemp(temperature);
@@ -278,13 +329,11 @@ void Controller::setTargetTemp(int temperature) {
         break;
     default:;
     }
-    clientController.sendPidSettings(settings.getPid());
-    updateControl();
     updateLastAction();
 }
 
-void Controller::setPressureScale(void){
-    if(systemInfo.capabilities.pressure){
+void Controller::setPressureScale(void) {
+    if (systemInfo.capabilities.pressure) {
         clientController.setPressureScale(settings.getPressureScaling());
     }
 }
@@ -311,9 +360,9 @@ void Controller::setTargetGrindDuration(int duration) {
     updateLastAction();
 }
 
-void Controller::setTargetGrindVolume(int volume) {
-    Event event = pluginManager->trigger("controller:grindVolume:change", "value", volume);
-    settings.setTargetGrindVolume(event.getInt("value"));
+void Controller::setTargetGrindVolume(double volume) {
+    Event event = pluginManager->trigger("controller:grindVolume:change", "value", static_cast<float>(volume));
+    settings.setTargetGrindVolume(event.getFloat("value"));
     updateLastAction();
 }
 
@@ -363,7 +412,7 @@ void Controller::lowerBrewTarget() {
 
 void Controller::raiseGrindTarget() {
     if (settings.isVolumetricTarget() && isVolumetricAvailable()) {
-        int newTarget = settings.getTargetGrindVolume() + 1;
+        double newTarget = settings.getTargetGrindVolume() + 0.5;
         if (newTarget > BREW_MAX_VOLUMETRIC) {
             newTarget = BREW_MAX_VOLUMETRIC;
         }
@@ -379,7 +428,7 @@ void Controller::raiseGrindTarget() {
 
 void Controller::lowerGrindTarget() {
     if (settings.isVolumetricTarget() && isVolumetricAvailable()) {
-        int newTarget = settings.getTargetGrindVolume() - 1;
+        double newTarget = settings.getTargetGrindVolume() - 0.5;
         if (newTarget < BREW_MIN_VOLUMETRIC) {
             newTarget = BREW_MIN_VOLUMETRIC;
         }
@@ -398,27 +447,36 @@ void Controller::updateControl() {
     if (targetTemp > 0) {
         targetTemp = targetTemp + settings.getTemperatureOffset();
     }
+    clientController.sendAltControl(isActive() && currentProcess->isAltRelayActive());
+    if (isActive() && currentProcess->getType() == MODE_BREW) {
+        auto *brewProcess = static_cast<BrewProcess *>(currentProcess);
+        if (brewProcess->isAdvancedPump() && systemInfo.capabilities.pressure) {
+            clientController.sendAdvancedOutputControl(brewProcess->isRelayActive(), static_cast<float>(targetTemp), true,
+                                                       brewProcess->getPumpTargetPressure(), 0.0f);
+            targetPressure = brewProcess->getPumpTargetPressure();
+            return;
+        }
+    }
+    targetPressure = 0.0f;
     clientController.sendOutputControl(isActive() && currentProcess->isRelayActive(),
                                        isActive() ? currentProcess->getPumpValue() : 0, static_cast<float>(targetTemp));
-    clientController.sendAltControl(isActive() && currentProcess->isAltRelayActive());
 }
 
 void Controller::activate() {
     if (isActive())
         return;
     clear();
+    clientController.tare();
+    delay(100);
     switch (mode) {
     case MODE_BREW:
-        if (settings.isVolumetricTarget() && volumetricAvailable) {
-            startProcess(new BrewProcess(ProcessTarget::VOLUMETRIC, settings.getPressurizeTime(), settings.getInfusePumpTime(),
-                                         settings.getInfuseBloomTime(), 0, settings.getTargetVolume(), settings.getBrewDelay()));
-        } else {
-            startProcess(new BrewProcess(ProcessTarget::TIME, settings.getPressurizeTime(), settings.getInfusePumpTime(),
-                                         settings.getInfuseBloomTime(), settings.getTargetDuration(), 0, 0.0));
-        }
+        startProcess(new BrewProcess(profileManager->getSelectedProfile(),
+                                     settings.isVolumetricTarget() && isVolumetricAvailable() ? ProcessTarget::VOLUMETRIC
+                                                                                              : ProcessTarget::TIME,
+                                     settings.getBrewDelay()));
         break;
     case MODE_STEAM:
-        startProcess(new SteamProcess());
+        startProcess(new SteamProcess(STEAM_SAFETY_DURATION_MS, settings.getSteamPumpPercentage()));
         break;
     case MODE_WATER:
         startProcess(new PumpProcess());
@@ -439,11 +497,10 @@ void Controller::deactivate() {
     currentProcess = nullptr;
     if (lastProcess->getType() == MODE_BREW) {
         pluginManager->trigger("controller:brew:end");
-    }
-    if (lastProcess->getType() == MODE_GRIND) {
+    } else if (lastProcess->getType() == MODE_GRIND) {
         pluginManager->trigger("controller:grind:end");
     }
-    updateControl();
+    pluginManager->trigger("controller:process:end");
     updateLastAction();
 }
 
@@ -461,7 +518,7 @@ void Controller::activateGrind() {
     if (isGrindActive())
         return;
     clear();
-    if (settings.isVolumetricTarget() && volumetricAvailable) {
+    if (settings.isVolumetricTarget() && isVolumetricAvailable()) {
         startProcess(new GrindProcess(ProcessTarget::VOLUMETRIC, 0, settings.getTargetGrindVolume(), settings.getGrindDelay()));
     } else {
         startProcess(
@@ -491,6 +548,7 @@ bool Controller::isGrindActive() const { return isActive() && currentProcess->ge
 int Controller::getMode() const { return mode; }
 
 void Controller::setMode(int newMode) {
+    steamReady = false;
     Event modeEvent = pluginManager->trigger("controller:mode:change", "value", newMode);
     mode = modeEvent.getInt("value");
 
@@ -511,13 +569,26 @@ void Controller::onOTAUpdate() {
     updating = true;
 }
 
-void Controller::onVolumetricMeasurement(double measurement) const {
+void Controller::onVolumetricMeasurement(double measurement, VolumetricMeasurementSource source) {
+    pluginManager->trigger(source == VolumetricMeasurementSource::FLOW_ESTIMATION
+                               ? F("controller:volumetric-measurement:estimation:change")
+                               : F("controller:volumetric-measurement:bluetooth:change"),
+                           "value", static_cast<float>(measurement));
     if (currentProcess != nullptr) {
         currentProcess->updateVolume(measurement);
     }
     if (lastProcess != nullptr) {
         lastProcess->updateVolume(measurement);
     }
+}
+
+void Controller::onFlush() {
+    if (isActive()) {
+        return;
+    }
+    clear();
+    startProcess(new BrewProcess(FLUSH_PROFILE, ProcessTarget::TIME, settings.getBrewDelay()));
+    pluginManager->trigger("controller:brew:start");
 }
 
 void Controller::handleBrewButton(int brewButtonStatus) {
@@ -537,6 +608,9 @@ void Controller::handleBrewButton(int brewButtonStatus) {
         case MODE_WATER:
             activate();
             break;
+        case MODE_STEAM:
+            deactivate();
+            setMode(MODE_BREW);
         default:
             break;
         }
@@ -563,15 +637,25 @@ void Controller::handleSteamButton(int steamButtonStatus) {
             break;
         case MODE_BREW:
             setMode(MODE_STEAM);
-            activate();
-            break;
-        case MODE_STEAM:
-            activate();
             break;
         default:
             break;
         }
     } else if (!settings.isMomentaryButtons() && getMode() == MODE_STEAM) {
         deactivate();
+        setMode(MODE_BREW);
+    }
+}
+
+void Controller::handleProfileUpdate() {
+    pluginManager->trigger("boiler:targetTemperature:change", "value",
+                           static_cast<int>(profileManager->getSelectedProfile().temperature));
+}
+
+void Controller::loopTask(void *arg) {
+    auto *controller = static_cast<Controller *>(arg);
+    while (true) {
+        controller->loopControl();
+        vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 }

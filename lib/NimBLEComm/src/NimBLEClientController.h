@@ -9,6 +9,9 @@ class NimBLEClientController : public NimBLEAdvertisedDeviceCallbacks, NimBLECli
     NimBLEClientController();
     void initClient();
     bool connectToServer();
+
+    void sendAdvancedOutputControl(bool valve, float boilerSetpoint, bool pressureTarget, float pressure, float flow);
+
     void sendOutputControl(bool valve, float pumpSetpoint, float boilerSetpoint);
     void sendAltControl(bool pinState);
     void sendPing();
@@ -18,11 +21,13 @@ class NimBLEClientController : public NimBLEAdvertisedDeviceCallbacks, NimBLECli
     bool isReadyForConnection() const;
     bool isConnected();
     void scan();
+    void tare();
     void registerRemoteErrorCallback(const remote_err_callback_t &callback);
     void registerBrewBtnCallback(const brew_callback_t &callback);
     void registerSteamBtnCallback(const steam_callback_t &callback);
     void registerSensorCallback(const sensor_read_callback_t &callback);
     void registerAutotuneResultCallback(const pid_control_callback_t &callback);
+    void registerVolumetricMeasurementCallback(const float_callback_t &callback);
     std::string readInfo() const;
     NimBLEClient *getClient() const { return client; };
 
@@ -45,6 +50,8 @@ class NimBLEClientController : public NimBLEAdvertisedDeviceCallbacks, NimBLECli
     NimBLERemoteCharacteristic *sensorChar = nullptr;
     NimBLERemoteCharacteristic *outputControlChar = nullptr;
     NimBLERemoteCharacteristic *pressureScaleChar = nullptr;
+    NimBLERemoteCharacteristic *volumetricMeasurementChar;
+    NimBLERemoteCharacteristic *volumetricTareChar;
     NimBLEAdvertisedDevice *serverDevice = nullptr;
     bool readyForConnection = false;
 
@@ -53,6 +60,7 @@ class NimBLEClientController : public NimBLEAdvertisedDeviceCallbacks, NimBLECli
     steam_callback_t steamBtnCallback = nullptr;
     pid_control_callback_t autotuneResultCallback = nullptr;
     sensor_read_callback_t sensorCallback = nullptr;
+    float_callback_t volumetricMeasurementCallback = nullptr;
 
     String _lastOutputControl = "";
 

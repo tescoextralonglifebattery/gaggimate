@@ -13,6 +13,7 @@ GaggiMateController::GaggiMateController() {
 }
 
 void GaggiMateController::setup() {
+    delay(5000);
     detectBoard();
     detectAddon();
 
@@ -31,7 +32,7 @@ void GaggiMateController::setup() {
         pressureSensor = new PressureSensor(_config.pressureSda, _config.pressureScl, [this](float pressure) { /* noop */ });
     }
     if (_config.capabilites.dimming) {
-        pump = new DimmedPump(_config.pumpPin, _config.pumpSensePin);
+        pump = new DimmedPump(_config.pumpPin, _config.pumpSensePin, pressureSensor);
     } else {
         pump = new SimplePump(_config.pumpPin, _config.pumpOn, _config.capabilites.ssrPump ? 1000.0f : 5000.0f);
     }
@@ -56,7 +57,27 @@ void GaggiMateController::setup() {
         this->pump->setPower(pumpSetpoint);
         this->valve->set(valve);
         this->heater->setSetpoint(heaterSetpoint);
+        if (!_config.capabilites.dimming) {
+            return;
+        }
+        auto dimmedPump = static_cast<DimmedPump *>(pump);
+        dimmedPump->setValveState(valve);
     });
+    _ble.registerAdvancedOutputControlCallback(
+        [this](bool valve, float heaterSetpoint, bool pressureTarget, float pressure, float flow) {
+            this->valve->set(valve);
+            this->heater->setSetpoint(heaterSetpoint);
+            if (!_config.capabilites.dimming) {
+                return;
+            }
+            auto dimmedPump = static_cast<DimmedPump *>(pump);
+            if (pressureTarget) {
+                dimmedPump->setPressureTarget(pressure, flow);
+            } else {
+                dimmedPump->setFlowTarget(flow, pressure);
+            }
+            dimmedPump->setValveState(valve);
+        });
     _ble.registerAltControlCallback([this](bool state) { this->alt->set(state); });
     _ble.registerPidControlCallback([this](float Kp, float Ki, float Kd) { this->heater->setTunings(Kp, Ki, Kd); });
     _ble.registerPingCallback([this]() {
@@ -64,7 +85,13 @@ void GaggiMateController::setup() {
         ESP_LOGV(LOG_TAG, "Ping received, system is alive");
     });
     _ble.registerAutotuneCallback([this](int goal, int windowSize) { this->heater->autotune(goal, windowSize); });
-
+    _ble.registerTareCallback([this]() {
+        if (!_config.capabilites.dimming) {
+            return;
+        }
+        auto dimmedPump = static_cast<DimmedPump *>(pump);
+        dimmedPump->tare();
+    });
     ESP_LOGI(LOG_TAG, "Initialization done");
 }
 
@@ -114,7 +141,6 @@ void GaggiMateController::handlePingTimeout() {
     this->pump->setPower(0);
     this->valve->set(false);
     this->alt->set(false);
-    _ble.sendError(ERROR_CODE_TIMEOUT);
 }
 
 void GaggiMateController::thermalRunawayShutdown() {
@@ -129,8 +155,11 @@ void GaggiMateController::thermalRunawayShutdown() {
 
 void GaggiMateController::sendSensorData() {
     if (_config.capabilites.pressure) {
-        _ble.sendSensorData(this->thermocouple->read(), this->pressureSensor->getPressure());
+        auto dimmedPump = static_cast<DimmedPump *>(pump);
+        _ble.sendSensorData(this->thermocouple->read(), this->pressureSensor->getPressure(), dimmedPump->getPuckFlow(),
+                            dimmedPump->getPumpFlow());
+        _ble.sendVolumetricMeasurement(dimmedPump->getCoffeeVolume());
     } else {
-        _ble.sendSensorData(this->thermocouple->read(), 0.0f);
+        _ble.sendSensorData(this->thermocouple->read(), 0.0f, 0.0f, 0.0f);
     }
 }

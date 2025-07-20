@@ -2,8 +2,6 @@ on:
   push:
     tags:
       - "*"
-    branches:
-      - "master"
 
 permissions:
   contents: write
@@ -63,7 +61,6 @@ jobs:
         with:
           name: gaggimate-firmware
           path: "out/*"
-
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -81,35 +78,3 @@ jobs:
           generateReleaseNotes: true
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
-
-  release-nightly:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pages: write
-      pull-requests: write
-    steps:
-      - name: Download Firmware Files
-        uses: actions/download-artifact@v4
-        with:
-          name: gaggimate-firmware
-          path: release
-      - name: Update Nightly Release
-        uses: andelf/nightly-release@main
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: nightly
-          name: 'Nightly Release $$'
-          prerelease: true
-          body: 'Latest nightly release, use the nightly channel in the UI to download this firmware.'
-          files: |
-            release/*
-      - name: Deploy to GitHub Pages subdirectory
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./release
-          destination_dir: nightly
-          publish_branch: gh-pages

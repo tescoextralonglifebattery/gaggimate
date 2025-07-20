@@ -11,6 +11,7 @@
 #include <scales/felicitaScale.h>
 #include <scales/timemore.h>
 #include <scales/varia.h>
+#include <scales/weighmybru.h>
 
 void on_ble_measurement(float value) { BLEScales.onMeasurement(value); }
 
@@ -30,7 +31,15 @@ void BLEScalePlugin::setup(Controller *controller, PluginManager *manager) {
     FelicitaScalePlugin::apply();
     TimemoreScalesPlugin::apply();
     VariaScalesPlugin::apply();
+    WeighMyBrewScalePlugin::apply();
     this->scanner = new RemoteScalesScanner();
+    manager->on("controller:ready", [this](Event const &) {
+        if (this->controller->getMode() != MODE_STANDBY) {
+            ESP_LOGI("BLEScalePlugin", "Resuming scanning");
+            scan();
+            active = true;
+        }
+    });
     manager->on("controller:brew:start", [this](Event const &) { onProcessStart(); });
     manager->on("controller:grind:start", [this](Event const &) { onProcessStart(); });
     manager->on("controller:mode:change", [this](Event const &event) {
@@ -59,7 +68,7 @@ void BLEScalePlugin::loop() {
 }
 
 void BLEScalePlugin::update() {
-    controller->setVolumetricAvailable(scale != nullptr && scale->isConnected());
+    controller->setVolumetricOverride(scale != nullptr && scale->isConnected());
     if (!active)
         return;
     if (scale != nullptr) {
@@ -138,7 +147,7 @@ void BLEScalePlugin::establishConnection() {
 
 void BLEScalePlugin::onMeasurement(float value) const {
     if (controller != nullptr) {
-        controller->onVolumetricMeasurement(value);
+        controller->onVolumetricMeasurement(value, VolumetricMeasurementSource::BLUETOOTH);
     }
 }
 

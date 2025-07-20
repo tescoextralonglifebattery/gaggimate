@@ -55,6 +55,10 @@ void NimBLEServerController::initServer(const String infoString) {
     pressureScaleChar = pService->createCharacteristic(PRESSURE_SCALE_UUID, NIMBLE_PROPERTY::WRITE);
     pressureScaleChar->setCallbacks(this); // Use this class as the callback handler
 
+    volumetricMeasurementChar = pService->createCharacteristic(VOLUMETRIC_MEASUREMENT_UUID, NIMBLE_PROPERTY::NOTIFY);
+    volumetricTareChar = pService->createCharacteristic(VOLUMETRIC_TARE_UUID, NIMBLE_PROPERTY::WRITE);
+    volumetricTareChar->setCallbacks(this);
+
     pService->start();
 
     ota_dfu_ble.configure_OTA(pServer);
@@ -67,10 +71,10 @@ void NimBLEServerController::initServer(const String infoString) {
     ESP_LOGI(LOG_TAG, "BLE Server started, advertising...\n");
 }
 
-void NimBLEServerController::sendSensorData(float temperature, float pressure) {
+void NimBLEServerController::sendSensorData(float temperature, float pressure, float puckFlow, float pumpFlow) {
     if (deviceConnected && sensorChar != nullptr) {
         char str[30];
-        snprintf(str, sizeof(str), "%.3f,%.3f", temperature, pressure);
+        snprintf(str, sizeof(str), "%.3f,%.3f,%.3f,%.3f", temperature, pressure, puckFlow, pumpFlow);
         sensorChar->setValue(str);
         sensorChar->notify();
     }
@@ -115,13 +119,29 @@ void NimBLEServerController::sendAutotuneResult(float Kp, float Ki, float Kd) {
     }
 }
 
+void NimBLEServerController::sendVolumetricMeasurement(float value) {
+    if (deviceConnected) {
+        char data[8];
+        snprintf(data, sizeof(data), "%.2f", value);
+        volumetricMeasurementChar->setValue(data);
+        volumetricMeasurementChar->notify();
+    }
+}
+
 void NimBLEServerController::registerOutputControlCallback(const simple_output_callback_t &callback) {
     outputControlCallback = callback;
 }
+
+void NimBLEServerController::registerAdvancedOutputControlCallback(const advanced_output_callback_t &callback) {
+    advancedControlCallback = callback;
+}
+
 void NimBLEServerController::registerAltControlCallback(const pin_control_callback_t &callback) { altControlCallback = callback; }
 void NimBLEServerController::registerPingCallback(const ping_callback_t &callback) { pingCallback = callback; }
 void NimBLEServerController::registerAutotuneCallback(const autotune_callback_t &callback) { autotuneCallback = callback; }
 void NimBLEServerController::registerPressureScaleCallback(const float_callback_t &callback) { pressureScaleCallback = callback; }
+
+void NimBLEServerController::registerTareCallback(const void_callback_t &callback) { tareCallback = callback; }
 
 void NimBLEServerController::setInfo(const String infoString) {
     this->infoString = infoString;
@@ -150,13 +170,23 @@ void NimBLEServerController::onWrite(NimBLECharacteristic *pCharacteristic) {
         auto control = String(pCharacteristic->getValue().c_str());
         uint8_t type = get_token(control, 0, ',').toInt();
         uint8_t valve = get_token(control, 1, ',').toInt();
-        float pumpSetpoint = get_token(control, 2, ',').toFloat();
         float boilerSetpoint = get_token(control, 3, ',').toFloat();
-
-        ESP_LOGV(LOG_TAG, "Received output control: type=%d, valve=%d, pump=%.1f, boiler=%.1f", type, valve, pumpSetpoint,
-                 boilerSetpoint);
-        if (outputControlCallback != nullptr) {
-            outputControlCallback(valve == 1, pumpSetpoint, boilerSetpoint);
+        if (type == 0) {
+            float pumpSetpoint = get_token(control, 2, ',').toFloat();
+            ESP_LOGV(LOG_TAG, "Received output control: type=%d, valve=%d, pump=%.1f, boiler=%.1f", type, valve, pumpSetpoint,
+                     boilerSetpoint);
+            if (outputControlCallback != nullptr) {
+                outputControlCallback(valve == 1, pumpSetpoint, boilerSetpoint);
+            }
+        } else if (type == 1) {
+            bool pressureTarget = get_token(control, 4, ',').toInt() == 1;
+            float pumpPressure = get_token(control, 5, ',').toFloat();
+            float pumpFlow = get_token(control, 6, ',').toFloat();
+            ESP_LOGV(LOG_TAG, "Received advanced output control: type=%d, valve=%d, pressure_target=%d, pressure=%.1f, flow=%.1f",
+                     type, valve, pressureTarget, pumpPressure, pumpFlow);
+            if (advancedControlCallback != nullptr) {
+                advancedControlCallback(valve == 1, boilerSetpoint, pressureTarget, pumpPressure, pumpFlow);
+            }
         }
     } else if (pCharacteristic->getUUID().equals(NimBLEUUID(ALT_CONTROL_CHAR_UUID))) {
         bool pinState = (pCharacteristic->getValue()[0] == '1');
@@ -193,6 +223,11 @@ void NimBLEServerController::onWrite(NimBLECharacteristic *pCharacteristic) {
         ESP_LOGV(LOG_TAG, "Received pressure scale: %.2f", scale_value);
         if (pressureScaleCallback != nullptr) {
             pressureScaleCallback(scale_value);
+        }
+    } else if (pCharacteristic->getUUID().equals(NimBLEUUID(VOLUMETRIC_TARE_UUID))) {
+        ESP_LOGV(LOG_TAG, "Received tare");
+        if (tareCallback != nullptr) {
+            tareCallback();
         }
     }
 }

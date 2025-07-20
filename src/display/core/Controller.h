@@ -7,106 +7,78 @@
 #include "Settings.h"
 #include <WiFi.h>
 #include <display/core/Process.h>
+#include <display/core/ProfileManager.h>
 #include <display/ui/default/DefaultUI.h>
 
 const IPAddress WIFI_AP_IP(4, 4, 4, 1); // the IP address the web server, Samsung requires the IP to be in public space
 const IPAddress WIFI_SUBNET_MASK(255, 255, 255, 0); // no need to change: https://avinetworks.com/glossary/subnet-mask/
 
+enum class VolumetricMeasurementSource { FLOW_ESTIMATION, BLUETOOTH };
+
 class Controller {
   public:
     Controller() = default;
 
-    // Base methods called from sketch
     void setup();
-
     void connect();
-
-    void loop(); // Called in loop, encapsulating most of the functionality
-
-    // Getters and setters
-    int getMode() const;
+    void loop();
+    void loopControl();
 
     void setMode(int newMode);
-
-    int getTargetTemp();
-
     void setTargetTemp(int temperature);
-
     void setPressureScale();
-
-    int getTargetDuration() const;
-
     void setTargetDuration(int duration);
-
     void setTargetVolume(int volume);
-
-    int getTargetGrindDuration() const;
-
     void setTargetGrindDuration(int duration);
+    void setTargetGrindVolume(double volume);
 
-    void setTargetGrindVolume(int volume);
-
+    int getMode() const;
+    int getTargetTemp();
+    int getTargetDuration() const;
+    int getTargetGrindDuration() const;
     virtual int getCurrentTemp() const { return currentTemp; }
-
     bool isActive() const;
-
     bool isGrindActive() const;
-
     bool isUpdating() const;
-
     bool isAutotuning() const;
-
     bool isReady() const;
-
-    bool isVolumetricAvailable() const { return volumetricAvailable; }
+    bool isVolumetricAvailable() const;
+    virtual float getTargetPressure() const { return targetPressure; }
+    virtual float getCurrentPressure() const { return pressure; }
+    virtual float getCurrentPuckFlow() const { return currentPuckFlow; }
+    virtual float getCurrentPumpFlow() const { return currentPumpFlow; }
 
     void autotune(int testTime, int samples);
     void startProcess(Process *process);
     Process *getProcess() const { return currentProcess; }
     Process *getLastProcess() const { return lastProcess; }
     Settings &getSettings() { return settings; }
+    ProfileManager *getProfileManager() { return profileManager; }
     DefaultUI *getUI() const { return ui; }
     bool isErrorState() const { return error > 0; }
     int getError() const { return error; }
 
     // Event callback methods
     void updateLastAction();
-
     void raiseTemp();
-
     void lowerTemp();
-
     void raiseBrewTarget();
-
     void lowerBrewTarget();
-
     void raiseGrindTarget();
-
     void lowerGrindTarget();
-
     void activate();
-
     void deactivate();
-
     void clear();
-
     void activateGrind();
-
     void deactivateGrind();
-
     void activateStandby();
-
     void deactivateStandby();
-
     void onOTAUpdate();
-
     void onScreenReady();
-
     void onTargetChange(ProcessTarget target);
-
-    void onVolumetricMeasurement(double measurement) const;
-
-    void setVolumetricAvailable(bool available) { volumetricAvailable = available; }
+    void onVolumetricMeasurement(double measurement, VolumetricMeasurementSource source);
+    void setVolumetricOverride(bool override) { volumetricOverride = override; }
+    void onFlush();
 
     SystemInfo getSystemInfo() const { return systemInfo; }
 
@@ -115,9 +87,9 @@ class Controller {
   private:
     // Initialization methods
     void setupPanel();
-    void setupWifi();
     void setupBluetooth();
     void setupInfos();
+    void setupWifi();
 
     // Functional methods
     void updateControl();
@@ -130,6 +102,7 @@ class Controller {
 
     // steam button
     void handleSteamButton(int steamButtonStatus);
+    void handleProfileUpdate();
 
     // Private Attributes
     DefaultUI *ui = nullptr;
@@ -137,10 +110,14 @@ class Controller {
     hw_timer_t *timer = nullptr;
     Settings settings;
     PluginManager *pluginManager{};
+    ProfileManager *profileManager{};
 
     int mode = MODE_BREW;
     int currentTemp = 0;
     float pressure = 0.0f;
+    float targetPressure = 0.0f;
+    float currentPuckFlow = 0.0f;
+    float currentPumpFlow = 0.0f;
 
     SystemInfo systemInfo{};
 
@@ -157,9 +134,14 @@ class Controller {
     bool isApConnection = false;
     bool initialized = false;
     bool screenReady = false;
-    bool volumetricAvailable = false;
+    bool volumetricOverride = false;
     bool processCompleted = false;
+    bool steamReady = false;
     int error = 0;
+
+    xTaskHandle taskHandle;
+
+    static void loopTask(void *arg);
 };
 
 #endif // CONTROLLER_H

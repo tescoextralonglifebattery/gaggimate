@@ -15,6 +15,7 @@ import { Navigation } from './components/Navigation.jsx';
 import { ProfileList } from './pages/ProfileList/index.jsx';
 import { ProfileEdit } from './pages/ProfileEdit/index.jsx';
 import { Autotune } from './pages/Autotune/index.jsx';
+import { ShotHistory } from './pages/ShotHistory/index.jsx';
 
 const apiService = new ApiService();
 
@@ -28,7 +29,6 @@ export function App() {
             className="mx-auto flex min-h-screen w-full min-w-[320px] flex-col bg-slate-100 dark:bg-slate-900"
           >
             <Header />
-
 
             <main id="page-content" class="flex max-w-full flex-auto flex-col">
               <div class="container mx-auto p-4 lg:p-8 xl:max-w-7xl">
@@ -44,6 +44,7 @@ export function App() {
                         <Route path="/ota" component={OTA} />
                         <Route path="/scales" component={Scales} />
                         <Route path="/pidtune" component={Autotune} />
+                        <Route path="/history" component={ShotHistory} />
                         <Route default component={NotFound} />
                       </Router>
                     </ErrorBoundary>
@@ -56,9 +57,7 @@ export function App() {
         </div>
       </ApiServiceContext.Provider>
     </LocationProvider>
-);
+  );
 }
 
-render(
-  <App />
-, document.getElementById('app'));
+render(<App />, document.getElementById('app'));

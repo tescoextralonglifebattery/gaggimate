@@ -1,10 +1,11 @@
+#pragma once
 #ifndef SETTINGS_H
 #define SETTINGS_H
 
-#include "constants.h"
-
 #include <Arduino.h>
 #include <Preferences.h>
+#include <display/core/constants.h>
+#include <display/core/utils.h>
 
 #define PREFERENCES_KEY "controller"
 
@@ -26,7 +27,7 @@ class Settings {
     float getPressureScaling() const { return pressureScaling; }
     int getTargetDuration() const { return targetDuration; }
     int getTargetVolume() const { return targetVolume; }
-    int getTargetGrindVolume() const { return targetGrindVolume; }
+    double getTargetGrindVolume() const { return targetGrindVolume; }
     int getTargetGrindDuration() const { return targetGrindDuration; }
     int getStartupMode() const { return startupMode; }
     int getStandbyTimeout() const { return standbyTimeout; }
@@ -57,6 +58,17 @@ class Settings {
     int getHomeAssistantPort() const { return homeAssistantPort; }
     bool isMomentaryButtons() const { return momentaryButtons; }
     String getTimezone() const { return timezone; }
+    bool isClock24hFormat() const { return clock24hFormat; }
+    String getSelectedProfile() const { return selectedProfile; }
+    bool isProfilesMigrated() const { return profilesMigrated; }
+    std::vector<String> getFavoritedProfiles() const { return favoritedProfiles; }
+    int getMainBrightness() const { return mainBrightness; }
+    int getStandbyBrightness() const { return standbyBrightness; }
+    int getStandbyBrightnessTimeout() const { return standbyBrightnessTimeout; }
+    int getWifiApTimeout() const { return wifiApTimeout; }
+    float getSteamPumpPercentage() const { return steamPumpPercentage; }
+    int getThemeMode() const { return themeMode; }
+    int getHistoryIndex() const { return historyIndex; }
     void setTargetBrewTemp(int target_brew_temp);
     void setTargetSteamTemp(int target_steam_temp);
     void setTargetWaterTemp(int target_water_temp);
@@ -64,7 +76,7 @@ class Settings {
     void setPressureScaling(float pressure_scaling);
     void setTargetDuration(int target_duration);
     void setTargetVolume(int target_volume);
-    void setTargetGrindVolume(int target_grind_volume);
+    void setTargetGrindVolume(double target_grind_volume);
     void setTargetGrindDuration(int target_duration);
     void setStartupMode(int startup_mode);
     void setStandbyTimeout(int standby_timeout);
@@ -95,28 +107,37 @@ class Settings {
     void setHomeAssistantPort(int homeAssistantPort);
     void setMomentaryButtons(bool momentary_buttons);
     void setTimezone(String timezone);
+    void setClockFormat(bool format_24h);
+    void setSelectedProfile(String selected_profile);
+    void setProfilesMigrated(bool profiles_migrated);
+    void setFavoritedProfiles(std::vector<String> favorited_profiles);
+    void addFavoritedProfile(String profile);
+    void removeFavoritedProfile(String profile);
+    void setMainBrightness(int main_brightness);
+    void setStandbyBrightness(int standby_brightness);
+    void setStandbyBrightnessTimeout(int standby_brightness_timeout);
+    void setWifiApTimeout(int timeout);
+    void setSteamPumpPercentage(float steam_pump_percentage);
+    void setThemeMode(int theme_mode);
+    void setHistoryIndex(int history_index);
 
   private:
     Preferences preferences;
     bool dirty = false;
 
-    int targetBrewTemp = 93;
+    String selectedProfile;
+    bool profilesMigrated = false;
     int targetSteamTemp = 155;
     int targetWaterTemp = 80;
     int temperatureOffset = DEFAULT_TEMPERATURE_OFFSET;
     float pressureScaling = DEFAULT_PRESSURE_SCALING;
-    int targetDuration = 25000;
-    int targetVolume = 36;
-    int targetGrindVolume = 18;
+    double targetGrindVolume = 18;
     int targetGrindDuration = 25000;
     double brewDelay = 1000.0;
     double grindDelay = 1000.0;
     bool delayAdjust = true;
     int startupMode = MODE_STANDBY;
     int standbyTimeout = DEFAULT_STANDBY_TIMEOUT_MS;
-    int infuseBloomTime = 0;
-    int infusePumpTime = 0;
-    int pressurizeTime = 0;
     String pid = DEFAULT_PID;
     String wifiSsid = "";
     String wifiPassword = "";
@@ -138,8 +159,26 @@ class Settings {
     int homeAssistantPort = 1883;
     bool momentaryButtons = false;
     String timezone = DEFAULT_TIMEZONE;
-
+    bool clock24hFormat = true;
     String otaChannel = DEFAULT_OTA_CHANNEL;
+    std::vector<String> favoritedProfiles;
+    float steamPumpPercentage = DEFAULT_STEAM_PUMP_PERCENTAGE;
+    int historyIndex = 0;
+
+    // Deprecated, use profiles
+    int targetBrewTemp = 93;
+    int targetDuration = 25000;
+    int targetVolume = 36;
+    int infuseBloomTime = 0;
+    int infusePumpTime = 0;
+    int pressurizeTime = 0;
+
+    // Display settings
+    int mainBrightness = 16;
+    int standbyBrightness = 8;
+    int standbyBrightnessTimeout = 60000; // 60 seconds default
+    int wifiApTimeout = DEFAULT_WIFI_AP_TIMEOUT_MS;
+    int themeMode = 0;
 
     void doSave();
     xTaskHandle taskHandle;

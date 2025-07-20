@@ -118,3 +118,15 @@ def onNextProfile(event_struct):
 def onProfileLoad(event_struct):
     return
 
+
+def onProfileSelect(event_struct):
+    return
+
+
+def onFlush(event_struct):
+    return
+
+
+def onSimpleProcessToggle(event_struct):
+    return
+

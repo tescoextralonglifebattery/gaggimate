@@ -10,7 +10,7 @@ Settings::Settings() {
     targetWaterTemp = preferences.getInt("tw", 80);
     targetDuration = preferences.getInt("td", 25000);
     targetVolume = preferences.getInt("tv", 36);
-    targetGrindVolume = preferences.getInt("tgv", 18);
+    targetGrindVolume = preferences.getDouble("tgv", 18.0);
     targetGrindDuration = preferences.getInt("tgd", 25000);
     brewDelay = preferences.getDouble("del_br", 1000.0);
     grindDelay = preferences.getDouble("del_gd", 1000.0);
@@ -43,6 +43,20 @@ Settings::Settings() {
     homeAssistantPassword = preferences.getString("ha_pw", "");
     standbyTimeout = preferences.getInt("sbt", DEFAULT_STANDBY_TIMEOUT_MS);
     timezone = preferences.getString("tz", DEFAULT_TIMEZONE);
+    clock24hFormat = preferences.getBool("clk_24h", true);
+    selectedProfile = preferences.getString("sp", "");
+    profilesMigrated = preferences.getBool("pm", false);
+    favoritedProfiles = explode(preferences.getString("fp", ""), ',');
+    steamPumpPercentage = preferences.getFloat("spp", DEFAULT_STEAM_PUMP_PERCENTAGE);
+    historyIndex = preferences.getInt("hi", 0);
+
+    // Display settings
+    mainBrightness = preferences.getInt("main_b", 16);
+    standbyBrightness = preferences.getInt("standby_b", 8);
+    standbyBrightnessTimeout = preferences.getInt("standby_bt", 60000);
+    wifiApTimeout = preferences.getInt("wifi_apt", DEFAULT_WIFI_AP_TIMEOUT_MS);
+    themeMode = preferences.getInt("theme", 0);
+
     preferences.end();
 
     xTaskCreate(loopTask, "Settings::loop", configMINIMAL_STACK_SIZE * 6, this, 1, &taskHandle);
@@ -81,7 +95,7 @@ void Settings::setTemperatureOffset(const int temperature_offset) {
     save();
 }
 
-void Settings::setPressureScaling(const float pressure_scaling){
+void Settings::setPressureScaling(const float pressure_scaling) {
     pressureScaling = pressure_scaling;
     save();
 }
@@ -96,7 +110,7 @@ void Settings::setTargetVolume(int target_volume) {
     save();
 }
 
-void Settings::setTargetGrindVolume(int target_grind_volume) {
+void Settings::setTargetGrindVolume(double target_grind_volume) {
     targetGrindVolume = target_grind_volume;
     save();
 }
@@ -107,12 +121,12 @@ void Settings::setTargetGrindDuration(const int target_duration) {
 }
 
 void Settings::setBrewDelay(double brew_Delay) {
-    brewDelay = brew_Delay;
+    brewDelay = std::clamp(brew_Delay, 0.0, 4000.0);
     save();
 }
 
 void Settings::setGrindDelay(double grind_Delay) {
-    grindDelay = grind_Delay;
+    grindDelay = std::clamp(grind_Delay, 0.0, 4000.0);
     save();
 }
 
@@ -249,6 +263,72 @@ void Settings::setTimezone(String timezone) {
     save();
 }
 
+void Settings::setClockFormat(bool clock_24h_format) {
+    this->clock24hFormat = clock_24h_format;
+    save();
+}
+
+void Settings::setSelectedProfile(String selected_profile) {
+    this->selectedProfile = std::move(selected_profile);
+    save();
+}
+
+void Settings::setProfilesMigrated(bool profiles_migrated) {
+    profilesMigrated = profiles_migrated;
+    save();
+}
+
+void Settings::setFavoritedProfiles(std::vector<String> favorited_profiles) {
+    favoritedProfiles = std::move(favorited_profiles);
+    save();
+}
+
+void Settings::addFavoritedProfile(String profile) {
+    favoritedProfiles.emplace_back(profile);
+    save();
+}
+
+void Settings::removeFavoritedProfile(String profile) {
+    favoritedProfiles.erase(std::remove(favoritedProfiles.begin(), favoritedProfiles.end(), profile), favoritedProfiles.end());
+    favoritedProfiles.shrink_to_fit();
+    save();
+}
+
+void Settings::setMainBrightness(int main_brightness) {
+    mainBrightness = main_brightness;
+    save();
+}
+
+void Settings::setStandbyBrightness(int standby_brightness) {
+    standbyBrightness = standby_brightness;
+    save();
+}
+
+void Settings::setStandbyBrightnessTimeout(int standby_brightness_timeout) {
+    standbyBrightnessTimeout = standby_brightness_timeout;
+    save();
+}
+
+void Settings::setWifiApTimeout(int timeout) {
+    wifiApTimeout = timeout;
+    save();
+}
+
+void Settings::setSteamPumpPercentage(float steam_pump_percentage) {
+    steamPumpPercentage = steam_pump_percentage;
+    save();
+}
+
+void Settings::setThemeMode(int theme_mode) {
+    themeMode = theme_mode;
+    save();
+}
+
+void Settings::setHistoryIndex(int history_index) {
+    historyIndex = history_index;
+    save();
+}
+
 void Settings::doSave() {
     if (!dirty) {
         return;
@@ -262,7 +342,7 @@ void Settings::doSave() {
     preferences.putInt("tw", targetWaterTemp);
     preferences.putInt("td", targetDuration);
     preferences.putInt("tv", targetVolume);
-    preferences.putInt("tgv", targetGrindVolume);
+    preferences.putDouble("tgv", targetGrindVolume);
     preferences.putInt("tgd", targetGrindDuration);
     preferences.putDouble("del_br", brewDelay);
     preferences.putDouble("del_gd", grindDelay);
@@ -293,7 +373,22 @@ void Settings::doSave() {
     preferences.putString("ha_u", homeAssistantUser);
     preferences.putString("ha_pw", homeAssistantPassword);
     preferences.putString("tz", timezone);
+    preferences.putBool("clk_24h", clock24hFormat);
+    preferences.putString("sp", selectedProfile);
     preferences.putInt("sbt", standbyTimeout);
+    preferences.putBool("pm", profilesMigrated);
+    preferences.putInt("mb", momentaryButtons);
+    preferences.putString("fp", implode(favoritedProfiles, ","));
+    preferences.putFloat("spp", steamPumpPercentage);
+    preferences.putInt("hi", historyIndex);
+
+    // Display settings
+    preferences.putInt("main_b", mainBrightness);
+    preferences.putInt("standby_b", standbyBrightness);
+    preferences.putInt("standby_bt", standbyBrightnessTimeout);
+    preferences.putInt("wifi_apt", wifiApTimeout);
+    preferences.putInt("theme", themeMode);
+
     preferences.end();
 }
 
@@ -301,6 +396,6 @@ void Settings::loopTask(void *arg) {
     auto *settings = static_cast<Settings *>(arg);
     while (true) {
         settings->doSave();
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(5000 / portTICK_PERIOD_MS);
     }
 }
