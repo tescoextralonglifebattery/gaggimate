@@ -14,8 +14,8 @@
 
 constexpr double PING_TIMEOUT_SECONDS = 20.0;
 
-constexpr int DETECT_EN_PIN = 40;
-constexpr int DETECT_VALUE_PIN = 11;
+//constexpr int DETECT_EN_PIN = 40;
+//constexpr int DETECT_VALUE_PIN = 11;
 
 class GaggiMateController {
   public:

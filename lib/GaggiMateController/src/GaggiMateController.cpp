@@ -80,23 +80,27 @@ void GaggiMateController::loop() {
 void GaggiMateController::registerBoardConfig(ControllerConfig config) { configs.push_back(config); }
 
 void GaggiMateController::detectBoard() {
-    pinMode(DETECT_EN_PIN, OUTPUT);
-    pinMode(DETECT_VALUE_PIN, INPUT_PULLDOWN);
-    digitalWrite(DETECT_EN_PIN, HIGH);
-    uint16_t millivolts = analogReadMilliVolts(DETECT_VALUE_PIN);
-    digitalWrite(DETECT_EN_PIN, LOW);
-    int boardId = round(((float)millivolts) / 100.0f - 0.5f);
-    ESP_LOGI(LOG_TAG, "Detected Board ID: %d", boardId);
+    // Hardcode the desired board ID.
+    // REPLACE 'YOUR_CHOSEN_BOARD_ID' with the actual autodetectValue
+    // from your ControllerConfig definitions (e.g., 1 for GM_STANDARD_REV_1X).
+    const int boardId = 1; // <--- ***CHANGE THIS NUMBER!***
+
+    ESP_LOGI(LOG_TAG, "Hardcoded Board ID: %d", boardId); // Log the hardcoded ID
+
     for (ControllerConfig config : configs) {
         if (config.autodetectValue == boardId) {
             _config = config;
-            ESP_LOGI(LOG_TAG, "Using Board: %s", _config.name.c_str());
-            return;
+            ESP_LOGI(LOG_TAG, "Using Board: %s (Hardcoded)", _config.name.c_str()); // Confirm board in use
+            return; // Board found and configured, exit function
         }
     }
-    ESP_LOGW(LOG_TAG, "No compatible board detected.");
-    delay(5000);
-    ESP.restart();
+
+    // This block will only be reached if the HARDCODED_BOARD_AUTODETECT_VALUE
+    // you provided above does not exist in your 'configs' vector.
+    // This indicates an inconsistency in your code or configuration definitions.
+    ESP_LOGE(LOG_TAG, "ERROR: Hardcoded Board ID %d not found in available configurations! This should not happen.", boardId);
+    delay(5000); // Wait 5 seconds
+    ESP.restart(); // Restart the ESP32 if the hardcoded ID is invalid
 }
 
 void GaggiMateController::detectAddon() {
