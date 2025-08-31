@@ -38,6 +38,7 @@ class Settings {
     double getGrindDelay() const { return grindDelay; }
     bool isDelayAdjust() const { return delayAdjust; }
     String getPid() const { return pid; }
+    String getPumpModelCoeffs() const { return pumpModelCoeffs; }
     String getWifiSsid() const { return wifiSsid; }
     String getWifiPassword() const { return wifiPassword; }
     String getMdnsName() const { return mdnsName; }
@@ -56,19 +57,29 @@ class Settings {
     String getHomeAssistantUser() const { return homeAssistantUser; }
     String getHomeAssistantPassword() const { return homeAssistantPassword; }
     int getHomeAssistantPort() const { return homeAssistantPort; }
+    String getHomeAssistantTopic() const { return homeAssistantTopic; }
     bool isMomentaryButtons() const { return momentaryButtons; }
     String getTimezone() const { return timezone; }
     bool isClock24hFormat() const { return clock24hFormat; }
     String getSelectedProfile() const { return selectedProfile; }
     bool isProfilesMigrated() const { return profilesMigrated; }
     std::vector<String> getFavoritedProfiles() const { return favoritedProfiles; }
+    std::vector<String> getProfileOrder() const { return profileOrder; }
     int getMainBrightness() const { return mainBrightness; }
     int getStandbyBrightness() const { return standbyBrightness; }
     int getStandbyBrightnessTimeout() const { return standbyBrightnessTimeout; }
     int getWifiApTimeout() const { return wifiApTimeout; }
     float getSteamPumpPercentage() const { return steamPumpPercentage; }
+    float getSteamPumpCutoff() const { return steamPumpCutoff; }
     int getThemeMode() const { return themeMode; }
     int getHistoryIndex() const { return historyIndex; }
+    int getSunriseR() const { return sunriseR; }
+    int getSunriseG() const { return sunriseG; }
+    int getSunriseB() const { return sunriseB; }
+    int getSunriseW() const { return sunriseW; }
+    int getSunriseExtBrightness() const { return sunriseExtBrightness; }
+    int getEmptyTankDistance() const { return emptyTankDistance; }
+    int getFullTankDistance() const { return fullTankDistance; }
     void setTargetBrewTemp(int target_brew_temp);
     void setTargetSteamTemp(int target_steam_temp);
     void setTargetWaterTemp(int target_water_temp);
@@ -87,6 +98,7 @@ class Settings {
     void setGrindDelay(double grindDelay);
     void setDelayAdjust(bool delay_adjust);
     void setPid(const String &pid);
+    void setPumpModelCoeffs(const String &pumpModelCoeffs);
     void setWifiSsid(const String &wifiSsid);
     void setWifiPassword(const String &wifiPassword);
     void setMdnsName(const String &mdnsName);
@@ -105,6 +117,7 @@ class Settings {
     void setHomeAssistantPassword(const String &homeAssistantPassword);
     void setHomeAssistantIP(const String &homeAssistantIP);
     void setHomeAssistantPort(int homeAssistantPort);
+    void setHomeAssistantTopic(const String &homeAssistantTopic);
     void setMomentaryButtons(bool momentary_buttons);
     void setTimezone(String timezone);
     void setClockFormat(bool format_24h);
@@ -113,13 +126,22 @@ class Settings {
     void setFavoritedProfiles(std::vector<String> favorited_profiles);
     void addFavoritedProfile(String profile);
     void removeFavoritedProfile(String profile);
+    void setProfileOrder(std::vector<String> profile_order);
     void setMainBrightness(int main_brightness);
     void setStandbyBrightness(int standby_brightness);
     void setStandbyBrightnessTimeout(int standby_brightness_timeout);
     void setWifiApTimeout(int timeout);
     void setSteamPumpPercentage(float steam_pump_percentage);
+    void setSteamPumpCutoff(float steam_pump_cutoff);
     void setThemeMode(int theme_mode);
     void setHistoryIndex(int history_index);
+    void setSunriseR(int sunrise_r);
+    void setSunriseG(int sunrise_g);
+    void setSunriseB(int sunrise_b);
+    void setSunriseW(int sunrise_w);
+    void setSunriseExtBrightness(int sunrise_ext_brightness);
+    void setEmptyTankDistance(int empty_tank_distance);
+    void setFullTankDistance(int full_tank_distance);
 
   private:
     Preferences preferences;
@@ -139,6 +161,7 @@ class Settings {
     int startupMode = MODE_STANDBY;
     int standbyTimeout = DEFAULT_STANDBY_TIMEOUT_MS;
     String pid = DEFAULT_PID;
+    String pumpModelCoeffs = DEFAULT_PUMP_MODEL_COEFFS;
     String wifiSsid = "";
     String wifiPassword = "";
     String mdnsName = DEFAULT_MDNS_NAME;
@@ -157,12 +180,15 @@ class Settings {
     String homeAssistantPassword = "";
     String homeAssistantIP = "";
     int homeAssistantPort = 1883;
+    String homeAssistantTopic = DEFAULT_HOME_ASSISTANT_TOPIC;
     bool momentaryButtons = false;
     String timezone = DEFAULT_TIMEZONE;
     bool clock24hFormat = true;
     String otaChannel = DEFAULT_OTA_CHANNEL;
     std::vector<String> favoritedProfiles;
+    std::vector<String> profileOrder; // persisted profile ordering
     float steamPumpPercentage = DEFAULT_STEAM_PUMP_PERCENTAGE;
+    float steamPumpCutoff = DEFAULT_STEAM_PUMP_CUTOFF;
     int historyIndex = 0;
 
     // Deprecated, use profiles
@@ -179,6 +205,15 @@ class Settings {
     int standbyBrightnessTimeout = 60000; // 60 seconds default
     int wifiApTimeout = DEFAULT_WIFI_AP_TIMEOUT_MS;
     int themeMode = 0;
+
+    // Sunrise settings
+    int sunriseR = 0;
+    int sunriseG = 0;
+    int sunriseB = 255;
+    int sunriseW = 50;
+    int sunriseExtBrightness = 255;
+    int emptyTankDistance = 200;
+    int fullTankDistance = 50;
 
     void doSave();
     xTaskHandle taskHandle;

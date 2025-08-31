@@ -48,6 +48,8 @@ void NimBLEClientController::registerVolumetricMeasurementCallback(const float_c
     volumetricMeasurementCallback = callback;
 }
 
+void NimBLEClientController::registerTofMeasurementCallback(const int_callback_t &callback) { tofMeasurementCallback = callback; }
+
 std::string NimBLEClientController::readInfo() const {
     if (infoChar != nullptr && infoChar->canRead()) {
         return infoChar->readValue();
@@ -91,9 +93,11 @@ bool NimBLEClientController::connectToServer() {
     autotuneChar = pRemoteService->getCharacteristic(NimBLEUUID(AUTOTUNE_CHAR_UUID));
     pingChar = pRemoteService->getCharacteristic(NimBLEUUID(PING_CHAR_UUID));
     pidControlChar = pRemoteService->getCharacteristic(NimBLEUUID(PID_CONTROL_CHAR_UUID));
+    pumpModelCoeffsChar = pRemoteService->getCharacteristic(NimBLEUUID(PUMP_MODEL_COEFFS_CHAR_UUID));
     infoChar = pRemoteService->getCharacteristic(NimBLEUUID(INFO_UUID));
     pressureScaleChar = pRemoteService->getCharacteristic(NimBLEUUID(PRESSURE_SCALE_UUID));
     volumetricTareChar = pRemoteService->getCharacteristic(NimBLEUUID(VOLUMETRIC_TARE_UUID));
+    ledControlChar = pRemoteService->getCharacteristic(NimBLEUUID(LED_CONTROL_UUID));
 
     // Obtain the remote notify characteristic and subscribe to it
 
@@ -134,6 +138,12 @@ bool NimBLEClientController::connectToServer() {
                                                        std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
     }
 
+    tofMeasurementChar = pRemoteService->getCharacteristic(NimBLEUUID(TOF_MEASUREMENT_UUID));
+    if (tofMeasurementChar != nullptr && tofMeasurementChar->canNotify()) {
+        tofMeasurementChar->subscribe(true, std::bind(&NimBLEClientController::notifyCallback, this, std::placeholders::_1,
+                                                      std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
+    }
+
     delay(500);
 
     readyForConnection = false;
@@ -166,9 +176,21 @@ void NimBLEClientController::sendPidSettings(const String &pid) {
     }
 }
 
+void NimBLEClientController::sendPumpModelCoeffs(const String &pumpModelCoeffs) {
+    if (pumpModelCoeffsChar != nullptr && client->isConnected()) {
+        pumpModelCoeffsChar->writeValue(pumpModelCoeffs);
+    }
+}
+
 void NimBLEClientController::setPressureScale(float scale) {
     if (client->isConnected() && pressureScaleChar != nullptr) {
         pressureScaleChar->writeValue(String(scale));
+    }
+}
+
+void NimBLEClientController::sendLedControl(uint8_t channel, uint8_t brightness) {
+    if (client->isConnected() && ledControlChar != nullptr) {
+        ledControlChar->writeValue(String(channel) + "," + String(brightness));
     }
 }
 
@@ -247,11 +269,13 @@ void NimBLEClientController::notifyCallback(NimBLERemoteCharacteristic *pRemoteC
         float pressure = get_token(data, 1, ',').toFloat();
         float puckFlow = get_token(data, 2, ',').toFloat();
         float pumpFlow = get_token(data, 3, ',').toFloat();
+        float puckResistance = get_token(data, 4, ',').toFloat();
 
-        ESP_LOGV(LOG_TAG, "Received sensor data: temperature=%.1f, pressure=%.1f, puck_flow=%.1f, pump_flow=%.1f", temperature,
-                 pressure, puckFlow, pumpFlow);
+        ESP_LOGV(LOG_TAG,
+                 "Received sensor data: temperature=%.1f, pressure=%.1f, puck_flow=%.1f, pump_flow=%.1f, puck_resistance=%.1f",
+                 temperature, pressure, puckFlow, pumpFlow, puckResistance);
         if (sensorCallback != nullptr) {
-            sensorCallback(temperature, pressure, puckFlow, pumpFlow);
+            sensorCallback(temperature, pressure, puckFlow, pumpFlow, puckResistance);
         }
     }
     if (pRemoteCharacteristic->getUUID().equals(NimBLEUUID(AUTOTUNE_RESULT_UUID))) {
@@ -269,6 +293,13 @@ void NimBLEClientController::notifyCallback(NimBLERemoteCharacteristic *pRemoteC
         ESP_LOGV(LOG_TAG, "Volumetric measurement: %.2f", value);
         if (volumetricMeasurementCallback != nullptr) {
             volumetricMeasurementCallback(value);
+        }
+    }
+    if (pRemoteCharacteristic->getUUID().equals(NimBLEUUID(TOF_MEASUREMENT_UUID))) {
+        int value = atoi((char *)pData);
+        ESP_LOGV(LOG_TAG, "ToF measurement: %.2f", value);
+        if (tofMeasurementCallback != nullptr) {
+            tofMeasurementCallback(value);
         }
     }
 }

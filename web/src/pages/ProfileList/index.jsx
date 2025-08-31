@@ -1,4 +1,3 @@
-import './style.css';
 import {
   Chart,
   LineController,
@@ -11,22 +10,36 @@ import {
   CategoryScale,
 } from 'chart.js';
 import 'chartjs-adapter-dayjs-4/dist/chartjs-adapter-dayjs-4.esm';
-Chart.register(LineController);
-Chart.register(TimeScale);
-Chart.register(LinearScale);
-Chart.register(CategoryScale);
-Chart.register(PointElement);
-Chart.register(LineElement);
-Chart.register(Filler);
-Chart.register(Legend);
-
-import { ExtendedContent } from './ExtendedContent.jsx';
+import { ExtendedProfileChart } from '../../components/ExtendedProfileChart.jsx';
 import { ProfileAddCard } from './ProfileAddCard.jsx';
-import { useContext } from 'react';
 import { ApiServiceContext, machine } from '../../services/ApiService.js';
-import { useCallback, useEffect, useState } from 'preact/hooks';
+import { useCallback, useEffect, useState, useContext, useRef } from 'preact/hooks';
 import { computed } from '@preact/signals';
 import { Spinner } from '../../components/Spinner.jsx';
+import Card from '../../components/Card.jsx';
+import { parseProfile } from './utils.js';
+import { downloadJson } from '../../utils/download.js';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faArrowUp } from '@fortawesome/free-solid-svg-icons/faArrowUp';
+import { faArrowDown } from '@fortawesome/free-solid-svg-icons/faArrowDown';
+import { faStar } from '@fortawesome/free-solid-svg-icons/faStar';
+import { faPen } from '@fortawesome/free-solid-svg-icons/faPen';
+import { faFileExport } from '@fortawesome/free-solid-svg-icons/faFileExport';
+import { faCopy } from '@fortawesome/free-solid-svg-icons/faCopy';
+import { faTrashCan } from '@fortawesome/free-solid-svg-icons/faTrashCan';
+import { faChevronRight } from '@fortawesome/free-solid-svg-icons/faChevronRight';
+import { faFileImport } from '@fortawesome/free-solid-svg-icons/faFileImport';
+
+Chart.register(
+  LineController,
+  TimeScale,
+  LinearScale,
+  CategoryScale,
+  PointElement,
+  LineElement,
+  Filler,
+  Legend,
+);
 
 const PhaseLabels = {
   preinfusion: 'Pre-Infusion',
@@ -35,16 +48,31 @@ const PhaseLabels = {
 
 const connected = computed(() => machine.value.connected);
 
-function ProfileCard({ data, onDelete, onSelect, onFavorite, onUnfavorite, onDuplicate, favoriteDisabled, unfavoriteDisabled }) {
-  const bookmarkClass = data.favorite ? 'text-yellow-400' : '';
+function ProfileCard({
+  data,
+  onDelete,
+  onSelect,
+  onFavorite,
+  onUnfavorite,
+  onDuplicate,
+  favoriteDisabled,
+  unfavoriteDisabled,
+  onMoveUp,
+  onMoveDown,
+  isFirst,
+  isLast,
+}) {
+  const bookmarkClass = data.favorite ? 'text-warning' : 'text-base-content/60';
   const typeText = data.type === 'pro' ? 'Pro' : 'Simple';
-  const typeClass = data.type === 'pro' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800';
+  const typeClass = data.type === 'pro' ? 'badge badge-primary' : 'badge badge-neutral';
   const favoriteToggleDisabled = data.favorite ? unfavoriteDisabled : favoriteDisabled;
   const favoriteToggleClass = favoriteToggleDisabled ? 'opacity-50 cursor-not-allowed' : '';
+
   const onFavoriteToggle = useCallback(() => {
     if (data.favorite && !unfavoriteDisabled) onUnfavorite(data.id);
     else if (!data.favorite && !favoriteDisabled) onFavorite(data.id);
-  }, [data.favorite]);
+  }, [data.favorite, unfavoriteDisabled, favoriteDisabled, onUnfavorite, onFavorite, data.id]);
+
   const onDownload = useCallback(() => {
     const download = {
       ...data,
@@ -52,125 +80,162 @@ function ProfileCard({ data, onDelete, onSelect, onFavorite, onUnfavorite, onDup
     delete download.id;
     delete download.selected;
     delete download.favorite;
-    var dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(download, undefined, 2));
-    var downloadAnchorNode = document.createElement('a');
-    downloadAnchorNode.setAttribute('href', dataStr);
-    downloadAnchorNode.setAttribute('download', data.id + '.json');
-    document.body.appendChild(downloadAnchorNode); // required for firefox
-    downloadAnchorNode.click();
-    downloadAnchorNode.remove();
+
+    downloadJson(download, `profile-${data.id}.json`);
   }, [data]);
 
   return (
-    <div
-      key="profile-list"
-      className="rounded-lg border flex flex-row items-center border-slate-200 bg-white p-4 sm:col-span-12 dark:bg-gray-800 dark:border-gray-600"
-    >
-      <div className="flex flex-row justify-center items-center lg:p-4 p-2">
-        <label className="flex items-center relative cursor-pointer" tooltip="Select profile" tooltip-position="right">
-          <input
-            checked={data.selected}
-            type="checkbox"
-            onClick={() => onSelect(data.id)}
-            className="peer h-6 w-6 cursor-pointer transition-all appearance-none rounded-full bg-slate-100 dark:bg-slate-700 shadow hover:shadow-md border border-slate-300 checked:bg-green-600 checked:border-green-600"
-            id="check-custom-style"
-          />
-          <span className="absolute text-white opacity-0 peer-checked:opacity-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
-            <i className="fa fa-check text-white" />
-          </span>
-        </label>
-      </div>
-      <div className="flex flex-col flex-grow overflow-auto">
-        <div className="flex flex-row gap-2 flex-wrap">
-          <div className="flex-grow flex flex-row items-center gap-4">
-            <span className="font-bold text-xl leading-tight">{data.label}</span>
-            <span className={`${typeClass} text-xs font-medium me-2 px-4 py-0.5 rounded-sm dark:bg-blue-900 dark:text-blue-300`}>
-              {typeText}
-            </span>
-          </div>
-          <div className="flex flex-row gap-2 justify-end">
+    <Card sm={12} role='listitem'>
+      <div
+        className='flex flex-row items-center'
+        role='group'
+        aria-labelledby={`profile-${data.id}-title`}
+      >
+        <div className='mr-4 flex flex-row items-center justify-center'>
+          <label className='relative flex cursor-pointer items-center'>
+            <input
+              checked={data.selected}
+              type='checkbox'
+              onClick={() => onSelect(data.id)}
+              className='checkbox checkbox-success'
+              aria-label={`Select ${data.label} profile`}
+            />
+          </label>
+          <div className='ml-2 flex flex-col gap-1'>
             <button
-              onClick={onFavoriteToggle}
-              disabled={favoriteToggleDisabled}
-              tooltip="Show/hide"
-              tooltip-position="left"
-              className={`group inline-block items-center justify-between gap-2 rounded-md border border-transparent px-2.5 py-2 text-sm font-semibold text-slate-900 hover:bg-yellow-100 hover:text-yellow-400 active:border-yellow-200 ${favoriteToggleClass}`}
+              onClick={() => onMoveUp(data.id)}
+              disabled={isFirst}
+              className='btn btn-xs btn-ghost'
+              aria-label={`Move ${data.label} up`}
+              aria-disabled={isFirst}
+              title='Move up'
             >
-              <span className={`fa fa-star ${bookmarkClass}`} />
+              <FontAwesomeIcon icon={faArrowUp} />
             </button>
-            <a
-              href={`/profiles/${data.id}`}
-              tooltip="Edit"
-              tooltip-position="left"
-              className="group inline-block items-center justify-between gap-2 rounded-md border border-transparent px-2.5 py-2 text-sm font-semibold text-slate-900 dark:text-indigo-100 hover:bg-indigo-100 hover:text-indigo-600 active:border-indigo-200"
+            <button
+              onClick={() => onMoveDown(data.id)}
+              disabled={isLast}
+              className='btn btn-xs btn-ghost'
+              aria-label={`Move ${data.label} down`}
+              aria-disabled={isLast}
+              title='Move down'
             >
-              <span className="fa fa-pen" />
-            </a>
-            <a
-              href="javascript:void(0)"
-              tooltip="Export"
-              tooltip-position="left"
-              onClick={() => onDownload()}
-              className="group inline-block items-center justify-between gap-2 rounded-md border border-transparent px-2.5 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-100 active:border-blue-200"
-            >
-              <span className="fa fa-file-export" />
-            </a>
-            <a
-              href="javascript:void(0)"
-              tooltip="Duplicate"
-              tooltip-position="left"
-              onClick={() => onDuplicate(data.id)}
-              className="group inline-block items-center justify-between gap-2 rounded-md border border-transparent px-2.5 py-2 text-sm font-semibold text-green-600 hover:bg-green-100 active:border-green-200"
-            >
-              <span className="fa fa-copy" />
-            </a>
-            <a
-              href="javascript:void(0)"
-              tooltip="Delete"
-              tooltip-position="left"
-              onClick={() => onDelete(data.id)}
-              className="group inline-block items-center justify-between gap-2 rounded-md border border-transparent px-2.5 py-2 text-sm font-semibold text-red-600 hover:bg-red-100 active:border-red-200"
-            >
-              <span className="fa fa-trash" />
-            </a>
+              <FontAwesomeIcon icon={faArrowDown} />
+            </button>
           </div>
         </div>
-        <div className="flex flex-row gap-2 py-4 items-center overflow-auto">
-          {data.type === 'pro' ? <ExtendedContent data={data} /> : <SimpleContent data={data} />}
+        <div className='flex flex-grow flex-col overflow-auto'>
+          <div className='flex flex-row flex-wrap gap-2'>
+            <div className='flex flex-grow flex-row items-center gap-4'>
+              <span id={`profile-${data.id}-title`} className='text-xl leading-tight font-bold'>
+                {data.label}
+              </span>
+              <span
+                className={`${typeClass} text-xs font-medium`}
+                aria-label={`Profile type: ${typeText}`}
+              >
+                {typeText}
+              </span>
+            </div>
+            <div
+              className='flex flex-row justify-end gap-2'
+              role='group'
+              aria-label={`Actions for ${data.label} profile`}
+            >
+              <button
+                onClick={onFavoriteToggle}
+                disabled={favoriteToggleDisabled}
+                className={`btn btn-sm btn-ghost ${favoriteToggleClass}`}
+                aria-label={
+                  data.favorite
+                    ? `Remove ${data.label} from favorites`
+                    : `Add ${data.label} to favorites`
+                }
+                aria-pressed={data.favorite}
+              >
+                <FontAwesomeIcon icon={faStar} className={bookmarkClass} />
+              </button>
+              <a
+                href={`/profiles/${data.id}`}
+                className='btn btn-sm btn-ghost'
+                aria-label={`Edit ${data.label} profile`}
+              >
+                <FontAwesomeIcon icon={faPen} />
+              </a>
+              <button
+                onClick={onDownload}
+                className='btn btn-sm btn-ghost text-primary'
+                aria-label={`Export ${data.label} profile`}
+              >
+                <FontAwesomeIcon icon={faFileExport} />
+              </button>
+              <button
+                onClick={() => onDuplicate(data.id)}
+                className='btn btn-sm btn-ghost text-success'
+                aria-label={`Duplicate ${data.label} profile`}
+              >
+                <FontAwesomeIcon icon={faCopy} />
+              </button>
+              <button
+                onClick={() => onDelete(data.id)}
+                className='btn btn-sm btn-ghost text-error'
+                aria-label={`Delete ${data.label} profile`}
+              >
+                <FontAwesomeIcon icon={faTrashCan} />
+              </button>
+            </div>
+          </div>
+          <div
+            className='flex flex-row items-center gap-2 overflow-auto py-2'
+            aria-label={`Profile details for ${data.label}`}
+          >
+            {data.type === 'pro' ? (
+              <ExtendedProfileChart data={data} className='max-h-36' />
+            ) : (
+              <SimpleContent data={data} />
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </Card>
   );
 }
 
 function SimpleContent({ data }) {
   return (
-    <>
+    <div className='flex flex-row items-center gap-2' role='list' aria-label='Brew phases'>
       {data.phases.map((phase, i) => (
-        <>
-          {i > 0 && <SimpleDivider key={`d-${i}`} />}
-          <SimpleStep phase={phase.phase} key={i} type={phase.name} duration={phase.duration} targets={phase.targets || []} />
-        </>
+        <div key={i} className='flex flex-row items-center gap-2' role='listitem'>
+          {i > 0 && <SimpleDivider />}
+          <SimpleStep
+            phase={phase.phase}
+            type={phase.name}
+            duration={phase.duration}
+            targets={phase.targets || []}
+          />
+        </div>
       ))}
-    </>
+    </div>
   );
 }
 
 function SimpleDivider() {
-  return <i className="fa-solid fa-chevron-right" />;
+  return (
+    <FontAwesomeIcon icon={faChevronRight} className='text-base-content/60' aria-hidden='true' />
+  );
 }
 
 function SimpleStep(props) {
   return (
-    <div className="bg-white border border-gray-200 p-2 rounded flex flex-col dark:bg-slate-700 dark:border-slate-800">
-      <div className="flex flex-row gap-2">
-        <span className="text-sm font-bold">{PhaseLabels[props.phase]}</span>
-        <span className="text-sm">{props.type}</span>
+    <div className='bg-base-100 border-base-300 flex flex-col gap-1 rounded-lg border p-3'>
+      <div className='flex flex-row gap-2'>
+        <span className='text-base-content text-sm font-bold'>{PhaseLabels[props.phase]}</span>
+        <span className='text-base-content/70 text-sm'>{props.type}</span>
       </div>
-      <div className="text-sm italic">
+      <div className='text-base-content/60 text-sm italic'>
         {props.targets.length === 0 && <span>Duration: {props.duration}s</span>}
         {props.targets.map((t, i) => (
-          <span>
+          <span key={i}>
             Exit on: {t.value}
             {t.type === 'volumetric' && 'g'}
           </span>
@@ -184,60 +249,141 @@ export function ProfileList() {
   const apiService = useContext(ApiServiceContext);
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
-  const favoriteCount = profiles.map((p) => (p.favorite ? 1 : 0)).reduce((a, b) => a + b, 0);
+  const favoriteCount = profiles.map(p => (p.favorite ? 1 : 0)).reduce((a, b) => a + b, 0);
   const unfavoriteDisabled = favoriteCount <= 1;
   const favoriteDisabled = favoriteCount >= 10;
+
   const loadProfiles = async () => {
     const response = await apiService.request({ tp: 'req:profiles:list' });
     setProfiles(response.profiles);
     setLoading(false);
   };
-  useEffect(async () => {
-    if (connected.value) {
-      await loadProfiles();
-    }
+
+  // Placeholder for future persistence of order (intentionally empty)
+  // Debounced persistence of profile order (300ms)
+  const orderDebounceRef = useRef(null);
+  const pendingOrderRef = useRef(null);
+  const persistProfileOrder = useCallback(
+    orderedProfiles => {
+      pendingOrderRef.current = orderedProfiles.map(p => p.id);
+      if (orderDebounceRef.current) {
+        clearTimeout(orderDebounceRef.current);
+      }
+      orderDebounceRef.current = setTimeout(async () => {
+        const orderedIds = pendingOrderRef.current;
+        if (!orderedIds) return;
+        try {
+          await apiService.request({ tp: 'req:profiles:reorder', order: orderedIds });
+        } catch (e) {
+          // optional: log or surface error
+        }
+      }, 300);
+    },
+    [apiService],
+  );
+
+  // Cleanup: flush pending order on unmount
+  useEffect(() => {
+    return () => {
+      if (orderDebounceRef.current) {
+        clearTimeout(orderDebounceRef.current);
+        if (pendingOrderRef.current) {
+          // fire and forget; no await during unmount
+          apiService
+            .request({ tp: 'req:profiles:reorder', order: pendingOrderRef.current })
+            .catch(() => {});
+        }
+      }
+    };
+  }, [apiService]);
+
+  const moveProfileUp = useCallback(
+    id => {
+      setProfiles(prev => {
+        const idx = prev.findIndex(p => p.id === id);
+        if (idx > 0) {
+          const next = [...prev];
+          [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+          persistProfileOrder(next);
+          return next;
+        }
+        return prev;
+      });
+    },
+    [persistProfileOrder],
+  );
+
+  const moveProfileDown = useCallback(
+    id => {
+      setProfiles(prev => {
+        const idx = prev.findIndex(p => p.id === id);
+        if (idx !== -1 && idx < prev.length - 1) {
+          const next = [...prev];
+          [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+          persistProfileOrder(next);
+          return next;
+        }
+        return prev;
+      });
+    },
+    [persistProfileOrder],
+  );
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const loadData = async () => {
+      if (connected.value) {
+        await loadProfiles();
+      }
+    };
+    loadData();
   }, [connected.value]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const onDelete = useCallback(
-    async (id) => {
+    async id => {
       setLoading(true);
       await apiService.request({ tp: 'req:profiles:delete', id });
       await loadProfiles();
     },
-    [apiService, setLoading]
+    [apiService, setLoading],
   );
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const onSelect = useCallback(
-    async (id) => {
+    async id => {
       setLoading(true);
       await apiService.request({ tp: 'req:profiles:select', id });
       await loadProfiles();
     },
-    [apiService, setLoading]
+    [apiService, setLoading],
   );
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const onFavorite = useCallback(
-    async (id) => {
+    async id => {
       setLoading(true);
       await apiService.request({ tp: 'req:profiles:favorite', id });
       await loadProfiles();
     },
-    [apiService, setLoading]
+    [apiService, setLoading],
   );
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const onUnfavorite = useCallback(
-    async (id) => {
+    async id => {
       setLoading(true);
       await apiService.request({ tp: 'req:profiles:unfavorite', id });
       await loadProfiles();
     },
-    [apiService, setLoading]
+    [apiService, setLoading],
   );
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const onDuplicate = useCallback(
-    async (id) => {
+    async id => {
       setLoading(true);
-      const original = profiles.find((p) => p.id === id);
+      const original = profiles.find(p => p.id === id);
       if (original) {
         const copy = { ...original };
         delete copy.id;
@@ -248,11 +394,11 @@ export function ProfileList() {
       }
       await loadProfiles();
     },
-    [apiService, profiles, setLoading]
+    [apiService, profiles, setLoading],
   );
 
   const onExport = useCallback(() => {
-    const exportedProfiles = profiles.map((p) => {
+    const exportedProfiles = profiles.map(p => {
       const ep = {
         ...p,
       };
@@ -261,28 +407,23 @@ export function ProfileList() {
       delete ep.favorite;
       return ep;
     });
-    var dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(exportedProfiles, undefined, 2));
-    var downloadAnchorNode = document.createElement('a');
-    downloadAnchorNode.setAttribute('href', dataStr);
-    downloadAnchorNode.setAttribute('download', 'profiles.json');
-    document.body.appendChild(downloadAnchorNode);
-    downloadAnchorNode.click();
-    downloadAnchorNode.remove();
+
+    downloadJson(exportedProfiles, 'profiles.json');
   }, [profiles]);
 
   const onUpload = function (evt) {
     if (evt.target.files.length) {
       const file = evt.target.files[0];
       const reader = new FileReader();
-      reader.onload = async (e) => {
-        let profiles = JSON.parse(e.target.result);
-        if (!Array.isArray(profiles)) {
-          profiles = [profiles];
+      reader.onload = async e => {
+        const result = e.target.result;
+        if (typeof result === 'string') {
+          const profiles = parseProfile(result);
+          for (const p of profiles) {
+            await apiService.request({ tp: 'req:profiles:save', profile: p });
+          }
+          await loadProfiles();
         }
-        for (const p of profiles) {
-          await apiService.request({ tp: 'req:profiles:save', profile: p });
-        }
-        await loadProfiles();
       };
       reader.readAsText(file);
     }
@@ -290,7 +431,12 @@ export function ProfileList() {
 
   if (loading) {
     return (
-      <div class="flex flex-row py-16 items-center justify-center w-full">
+      <div
+        className='flex w-full flex-row items-center justify-center py-16'
+        role='status'
+        aria-live='polite'
+        aria-label='Loading profiles'
+      >
         <Spinner size={8} />
       </div>
     );
@@ -298,32 +444,39 @@ export function ProfileList() {
 
   return (
     <>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-12 md:gap-2">
-        <div className="sm:col-span-12 flex flex-row">
-          <h2 className="text-2xl font-bold flex-grow">Profiles</h2>
-          <button
-            tooltip="Export"
-            onClick={onExport}
-            className="group flex items-center justify-between gap-2 rounded-md border border-transparent px-2.5 py-2 text-lg font-semibold text-blue-600 hover:bg-blue-100 active:border-blue-200"
-          >
-            <span className="fa fa-file-export" />
-          </button>
-          <div>
-            <label
-              tooltip="Import"
-              for="profileImport"
-              className="group flex items-center justify-between gap-2 rounded-md border border-transparent px-2.5 py-2 text-lg font-semibold text-blue-600 hover:bg-blue-100 active:border-blue-200"
-            >
-              <span className="fa fa-file-import" />
-            </label>
-          </div>
-          <input onChange={onUpload} className="hidden" id="profileImport" type="file" accept=".json,application/json" />
-        </div>
+      <div className='mb-4 flex flex-row items-center gap-2'>
+        <h1 className='flex-grow text-2xl font-bold sm:text-3xl'>Profiles</h1>
+        <button
+          onClick={onExport}
+          className='btn btn-ghost btn-sm'
+          title='Export all profiles'
+          aria-label='Export all profiles'
+        >
+          <FontAwesomeIcon icon={faFileExport} />
+        </button>
+        <label
+          htmlFor='profileImport'
+          className='btn btn-ghost btn-sm cursor-pointer'
+          title='Import profiles'
+          aria-label='Import profiles'
+        >
+          <FontAwesomeIcon icon={faFileImport} />
+        </label>
+        <input
+          onChange={onUpload}
+          className='hidden'
+          id='profileImport'
+          type='file'
+          accept='.json,application/json,.tcl'
+          aria-label='Select a JSON file containing profile data to import'
+        />
+      </div>
 
-        {profiles.map((data) => (
+      <div className='grid grid-cols-1 gap-4 lg:grid-cols-12' role='list' aria-label='Profile list'>
+        {profiles.map((data, idx) => (
           <ProfileCard
-            data={data}
             key={data.id}
+            data={data}
             onDelete={onDelete}
             onSelect={onSelect}
             favoriteDisabled={favoriteDisabled}
@@ -331,6 +484,10 @@ export function ProfileList() {
             onUnfavorite={onUnfavorite}
             onFavorite={onFavorite}
             onDuplicate={onDuplicate}
+            onMoveUp={moveProfileUp}
+            onMoveDown={moveProfileDown}
+            isFirst={idx === 0}
+            isLast={idx === profiles.length - 1}
           />
         ))}
 

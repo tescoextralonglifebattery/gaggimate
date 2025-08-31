@@ -3,11 +3,16 @@
 #include <SPIFFS.h>
 #include <display/core/Controller.h>
 #include <display/core/ProfileManager.h>
+#include <display/core/process/BrewProcess.h>
 #include <display/models/profile.h>
 
 #include "BLEScalePlugin.h"
 #include "ShotHistoryPlugin.h"
+#include <algorithm>
+#include <string>
+#include <unordered_map>
 #include <vector>
+static std::unordered_map<uint32_t, std::string> rxBuffers;
 
 WebUIPlugin::WebUIPlugin() : server(80), ws("/ws") {}
 
@@ -64,12 +69,43 @@ void WebUIPlugin::loop() {
         doc["ct"] = controller->getCurrentTemp();
         doc["tt"] = controller->getTargetTemp();
         doc["pr"] = controller->getCurrentPressure();
-        doc["fl"] = controller->getCurrentPuckFlow();
+        doc["fl"] = controller->getCurrentPumpFlow();
         doc["pt"] = controller->getTargetPressure();
         doc["m"] = controller->getMode();
         doc["p"] = controller->getProfileManager()->getSelectedProfile().label;
         doc["cp"] = controller->getSystemInfo().capabilities.pressure;
         doc["cd"] = controller->getSystemInfo().capabilities.dimming;
+        doc["bta"] = controller->isVolumetricAvailable() ? 1 : 0;
+        doc["bt"] = controller->isVolumetricAvailable() && controller->getSettings().isVolumetricTarget() ? 1 : 0;
+        doc["led"] = controller->getSystemInfo().capabilities.ledControl;
+
+        Process *process = controller->getProcess();
+        if (process == nullptr) {
+            process = controller->getLastProcess();
+        }
+        if (process != nullptr) {
+            auto pObj = doc["process"].to<JsonObject>();
+            pObj["a"] = controller->isActive() ? 1 : 0;
+            if (process->getType() == MODE_BREW) {
+                auto *brew = static_cast<BrewProcess *>(process);
+                unsigned long ts = brew->isActive() && controller->isActive() ? millis() : brew->finished;
+                pObj["s"] = brew->currentPhase.phase == PhaseType::PHASE_TYPE_BREW ? "brew" : "infusion";
+                pObj["l"] = brew->isActive() ? brew->currentPhase.name.c_str() : "Finished";
+                pObj["e"] = ts - brew->processStarted;
+                const bool isVolumetric = brew->target == ProcessTarget::VOLUMETRIC && brew->currentPhase.hasVolumetricTarget() &&
+                                          controller->isVolumetricAvailable();
+                pObj["tt"] = isVolumetric ? "volumetric" : "time";
+                if (isVolumetric) {
+                    Target t = brew->currentPhase.getVolumetricTarget();
+                    pObj["pt"] = t.value;
+                    pObj["pp"] = brew->currentVolume;
+                } else {
+                    pObj["pt"] = brew->getPhaseDuration();
+                    pObj["pp"] = ts - brew->currentPhaseStarted;
+                }
+            }
+        }
+
         ws.textAll(doc.as<String>());
     }
     if (now > lastCleanup + CLEANUP_PERIOD) {
@@ -121,34 +157,9 @@ void WebUIPlugin::setupServer() {
                 ESP_LOGI("WebUIPlugin", "WebSocket client connected (%d open connections)", server->getClients().size());
             } else if (type == WS_EVT_DISCONNECT) {
                 ESP_LOGI("WebUIPlugin", "WebSocket client disconnected (%d open connections)", server->getClients().size());
+                rxBuffers.erase(client->id());
             } else if (type == WS_EVT_DATA) {
-                auto *info = static_cast<AwsFrameInfo *>(arg);
-                if (info->final && info->index == 0 && info->len == len) {
-                    if (info->opcode == WS_TEXT) {
-                        data[len] = 0;
-                        ESP_LOGI("WebUIPlugin", "Received request: %", (char *)data);
-                        JsonDocument doc;
-                        DeserializationError err = deserializeJson(doc, data);
-                        if (!err) {
-                            String msgType = doc["tp"].as<String>();
-                            if (msgType.startsWith("req:profiles:")) {
-                                handleProfileRequest(client->id(), doc);
-                            } else if (msgType == "req:ota-settings") {
-                                handleOTASettings(client->id(), doc);
-                            } else if (msgType == "req:ota-start") {
-                                handleOTAStart(client->id(), doc);
-                            } else if (msgType == "req:autotune-start") {
-                                handleAutotuneStart(client->id(), doc);
-                            } else if (msgType.startsWith("req:history")) {
-                                JsonDocument resp;
-                                ShotHistory.handleRequest(doc, resp);
-                                String msg;
-                                serializeJson(resp, msg);
-                                ws.text(client->id(), msg);
-                            }
-                        }
-                    }
-                }
+                handleWebSocketData(server, client, type, arg, data, len);
             }
         });
     server.addHandler(&ws);
@@ -179,6 +190,76 @@ void WebUIPlugin::stop() {
         dnsServer = nullptr;
     }
     serverRunning = false;
+}
+
+void WebUIPlugin::handleWebSocketData(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg,
+                                      uint8_t *data, size_t len) {
+
+    auto *info = static_cast<AwsFrameInfo *>(arg);
+    const uint32_t cid = client->id();
+
+    if (info->index == 0) {
+        auto &buf = rxBuffers[cid];
+        buf.clear();
+        if (info->len <= 64 * 1024) {
+            buf.reserve(info->len);
+        }
+    }
+
+    auto &buf = rxBuffers[cid];
+    buf.append(reinterpret_cast<const char *>(data), len);
+    const bool isFinal = info->final && (info->index + len) == info->len;
+
+    // If this is the final frame of the message, process and clear
+    if (isFinal) {
+        if (info->opcode == WS_TEXT) {
+            ESP_LOGV("WebUIPlugin", "Received request: %.*s", (int)buf.size(), buf.c_str());
+            JsonDocument doc;
+            DeserializationError err = deserializeJson(doc, buf.c_str());
+            if (!err) {
+                String msgType = doc["tp"].as<String>();
+                if (msgType.startsWith("req:profiles:")) {
+                    handleProfileRequest(client->id(), doc);
+                } else if (msgType == "req:ota-settings") {
+                    handleOTASettings(client->id(), doc);
+                } else if (msgType == "req:ota-start") {
+                    handleOTAStart(client->id(), doc);
+                } else if (msgType == "req:autotune-start") {
+                    handleAutotuneStart(client->id(), doc);
+                } else if (msgType == "req:process:activate") {
+                    controller->activate();
+                } else if (msgType == "req:process:deactivate") {
+                    controller->deactivate();
+                    controller->clear();
+                } else if (msgType == "req:process:clear") {
+                    controller->clear();
+                } else if (msgType == "req:change-mode") {
+                    if (doc["mode"].is<uint8_t>()) {
+                        auto mode = doc["mode"].as<uint8_t>();
+                        controller->deactivate();
+                        controller->clear();
+                        controller->setMode(mode);
+                    }
+                } else if (msgType == "req:change-brew-target") {
+                    if (doc["target"].is<uint8_t>()) {
+                        auto target = doc["target"].as<uint8_t>();
+                        controller->getSettings().setVolumetricTarget(target);
+                    }
+                } else if (msgType.startsWith("req:history")) {
+                    JsonDocument resp;
+                    ShotHistory.handleRequest(doc, resp);
+                    size_t bufferSize = measureJson(resp);
+                    auto *buffer = ws.makeBuffer(bufferSize);
+                    serializeJson(resp, buffer->get(), bufferSize);
+                    client->text(buffer);
+                } else if (msgType == "req:flush:start") {
+                    handleFlushStart(client->id(), doc);
+                }
+            }
+        }
+        // Done with this message
+        rxBuffers.erase(cid);
+    }
 }
 
 void WebUIPlugin::handleOTASettings(uint32_t clientId, JsonDocument &request) {
@@ -254,11 +335,26 @@ void WebUIPlugin::handleProfileRequest(uint32_t clientId, JsonDocument &request)
     } else if (type == "req:profiles:unfavorite") {
         auto id = request["id"].as<String>();
         controller->getSettings().removeFavoritedProfile(id);
+    } else if (type == "req:profiles:reorder") {
+        // Expect an array of profile IDs in desired order
+        if (request["order"].is<JsonArray>()) {
+            std::vector<String> order;
+            for (JsonVariant v : request["order"].as<JsonArray>()) {
+                if (v.is<String>()) {
+                    String id = v.as<String>();
+                    if (!id.isEmpty() && std::find(order.begin(), order.end(), id) == order.end()) {
+                        order.emplace_back(std::move(id));
+                    }
+                }
+            }
+            controller->getSettings().setProfileOrder(order);
+        }
     }
 
-    String msg;
-    serializeJson(response, msg);
-    ws.text(clientId, msg);
+    size_t bufferSize = measureJson(response);
+    auto *buffer = ws.makeBuffer(bufferSize);
+    serializeJson(response, buffer->get(), bufferSize);
+    ws.text(clientId, buffer);
 }
 
 void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
@@ -276,6 +372,8 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
                 settings->setPressureScaling(request->arg("pressureScaling").toFloat());
             if (request->hasArg("pid"))
                 settings->setPid(request->arg("pid"));
+            if (request->hasArg("pumpModelCoeffs"))
+                settings->setPumpModelCoeffs(request->arg("pumpModelCoeffs"));
             if (request->hasArg("wifiSsid"))
                 settings->setWifiSsid(request->arg("wifiSsid"));
             if (request->hasArg("mdnsName"))
@@ -302,6 +400,8 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
                 settings->setHomeAssistantIP(request->arg("haIP"));
             if (request->hasArg("haPort"))
                 settings->setHomeAssistantPort(request->arg("haPort").toInt());
+            if (request->hasArg("haTopic"))
+                settings->setHomeAssistantTopic(request->arg("haTopic"));
             settings->setMomentaryButtons(request->hasArg("momentaryButtons"));
             settings->setDelayAdjust(request->hasArg("delayAdjust"));
             if (request->hasArg("brewDelay"))
@@ -321,11 +421,28 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
                 settings->setStandbyBrightnessTimeout(request->arg("standbyBrightnessTimeout").toInt() * 1000);
             if (request->hasArg("steamPumpPercentage"))
                 settings->setSteamPumpPercentage(request->arg("steamPumpPercentage").toFloat());
+            if (request->hasArg("steamPumpCutoff"))
+                settings->setSteamPumpCutoff(request->arg("steamPumpCutoff").toFloat());
             if (request->hasArg("themeMode"))
                 settings->setThemeMode(request->arg("themeMode").toInt());
+            if (request->hasArg("sunriseR"))
+                settings->setSunriseR(request->arg("sunriseR").toInt());
+            if (request->hasArg("sunriseG"))
+                settings->setSunriseG(request->arg("sunriseG").toInt());
+            if (request->hasArg("sunriseB"))
+                settings->setSunriseB(request->arg("sunriseB").toInt());
+            if (request->hasArg("sunriseW"))
+                settings->setSunriseW(request->arg("sunriseW").toInt());
+            if (request->hasArg("sunriseExtBrightness"))
+                settings->setSunriseExtBrightness(request->arg("sunriseExtBrightness").toInt());
+            if (request->hasArg("emptyTankDistance"))
+                settings->setEmptyTankDistance(request->arg("emptyTankDistance").toInt());
+            if (request->hasArg("fullTankDistance"))
+                settings->setFullTankDistance(request->arg("fullTankDistance").toInt());
             settings->save(true);
         });
         controller->setTargetTemp(controller->getTargetTemp());
+        controller->setPumpModelCoeffs();
     }
 
     AsyncResponseStream *response = request->beginResponseStream("application/json");
@@ -340,7 +457,9 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
     doc["haPassword"] = settings.getHomeAssistantPassword();
     doc["haIP"] = settings.getHomeAssistantIP();
     doc["haPort"] = settings.getHomeAssistantPort();
+    doc["haTopic"] = settings.getHomeAssistantTopic();
     doc["pid"] = settings.getPid();
+    doc["pumpModelCoeffs"] = settings.getPumpModelCoeffs();
     doc["wifiSsid"] = settings.getWifiSsid();
     doc["wifiPassword"] = apMode ? "---unchanged---" : settings.getWifiPassword();
     doc["mdnsName"] = settings.getMdnsName();
@@ -363,7 +482,15 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
     doc["standbyBrightness"] = settings.getStandbyBrightness();
     doc["standbyBrightnessTimeout"] = settings.getStandbyBrightnessTimeout() / 1000;
     doc["steamPumpPercentage"] = settings.getSteamPumpPercentage();
+    doc["steamPumpCutoff"] = settings.getSteamPumpCutoff();
     doc["themeMode"] = settings.getThemeMode();
+    doc["sunriseR"] = settings.getSunriseR();
+    doc["sunriseG"] = settings.getSunriseG();
+    doc["sunriseB"] = settings.getSunriseB();
+    doc["sunriseW"] = settings.getSunriseW();
+    doc["sunriseExtBrightness"] = settings.getSunriseExtBrightness();
+    doc["emptyTankDistance"] = settings.getEmptyTankDistance();
+    doc["fullTankDistance"] = settings.getFullTankDistance();
     serializeJson(doc, *response);
     request->send(response);
 
@@ -453,4 +580,17 @@ void WebUIPlugin::sendAutotuneResult() {
     doc["pid"] = controller->getSettings().getPid();
     String message = doc.as<String>();
     ws.textAll(message);
+}
+
+void WebUIPlugin::handleFlushStart(uint32_t clientId, JsonDocument &request) {
+    controller->onFlush();
+
+    JsonDocument response;
+    response["tp"] = "res:flush:start";
+    response["rid"] = request["rid"];
+    response["success"] = true;
+
+    String msg;
+    serializeJson(response, msg);
+    ws.text(clientId, msg);
 }

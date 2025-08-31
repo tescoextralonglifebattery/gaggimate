@@ -47,6 +47,10 @@ jobs:
         run: |
           export PLATFORMIO_BUILD_FLAGS="'-DNIGHTLY_BUILD'"
           pio run -e display
+      - name: Build headless
+        run: |
+          export PLATFORMIO_BUILD_FLAGS="'-DNIGHTLY_BUILD'"
+          pio run -e display-headless
       - name: Rename firmware files
         run: |
           mv .pio/build/controller/firmware.bin out/board-firmware.bin
@@ -55,12 +59,16 @@ jobs:
           mv .pio/build/display/firmware.bin out/display-firmware.bin
           mv .pio/build/display/partitions.bin out/display-partitions.bin
           mv .pio/build/display/bootloader.bin out/display-bootloader.bin
+          mv .pio/build/display-headless/firmware.bin out/display-headless-firmware.bin
+          mv .pio/build/display-headless/partitions.bin out/display-headless-partitions.bin
+          mv .pio/build/display-headless/bootloader.bin out/display-headless-bootloader.bin
       - name: Build display FS
         run: |
           pio run -t buildfs -e display
       - name: Rename FS files
         run: |
-          mv .pio/build/display/spiffs.bin out/display-filesystem.bin
+          cp .pio/build/display/spiffs.bin out/display-filesystem.bin
+          cp .pio/build/display/spiffs.bin out/display-headless-filesystem.bin
       - name: Archive Firmware Files
         uses: actions/upload-artifact@v4
         with:
@@ -80,7 +88,7 @@ jobs:
           name: gaggimate-firmware
           path: release
       - name: Update Nightly Release
-        uses: andelf/nightly-release@main
+        uses: andelf/nightly-release@c5ed4bdb7c1da04a4fa1e40bc5e67306f682563b
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -91,7 +99,7 @@ jobs:
           files: |
             release/*
       - name: Deploy to GitHub Pages subdirectory
-        uses: peaceiris/actions-gh-pages@v4
+        uses: peaceiris/actions-gh-pages@4f9cc6602d3f66b9c108549d475ec49e8ef4d45e
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./release

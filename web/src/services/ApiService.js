@@ -79,7 +79,10 @@ export default class ApiService {
     }
 
     // Calculate delay with exponential backoff
-    const delay = Math.min(this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts), this.maxReconnectDelay);
+    const delay = Math.min(
+      this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts),
+      this.maxReconnectDelay,
+    );
 
     console.log(`Scheduling reconnect attempt ${this.reconnectAttempts + 1} in ${delay}ms`);
 
@@ -113,12 +116,12 @@ export default class ApiService {
       throw new Error('WebSocket is not connected');
     }
 
-    const returnType = 'res:' + data.tp.substring(4);
+    const returnType = `res:${data.tp.substring(4)}`;
     const rid = uuidv4();
     const message = { ...data, rid };
     return new Promise((resolve, reject) => {
       // Create a listener for the response with matching rid
-      const listenerId = this.on(returnType, (response) => {
+      const listenerId = this.on(returnType, response => {
         if (response.rid === rid) {
           // Clean up the listener
           this.off(returnType, listenerId);
@@ -142,8 +145,8 @@ export default class ApiService {
     if (!this.listeners[type]) {
       this.listeners[type] = {};
     }
-    this.listeners[type][randomId()] = listener;
-    return randomId();
+    this.listeners[type][id] = listener;
+    return id;
   }
 
   off(type, id) {
@@ -159,8 +162,13 @@ export default class ApiService {
       currentFlow: message.fl,
       mode: message.m,
       selectedProfile: message.p,
+      brewTarget: message.bt || 0,
+      volumetricAvailable: message.bta || false,
+      process: message.process || null,
       timestamp: new Date(),
     };
+    const historyEntry = { ...newStatus };
+    delete historyEntry.process;
     const newValue = {
       ...machine.value,
       connected: true,
@@ -172,8 +180,9 @@ export default class ApiService {
         ...machine.value.capabilities,
         dimming: message.cd,
         pressure: message.cp,
+        ledControl: message.led,
       },
-      history: [...machine.value.history, newStatus],
+      history: [...machine.value.history, historyEntry],
     };
     newValue.history = newValue.history.slice(-600);
     machine.value = newValue;
@@ -189,6 +198,7 @@ export const machine = signal({
     targetTemperature: 0,
     mode: 0,
     selectedProfile: '',
+    process: null,
   },
   capabilities: {
     pressure: false,

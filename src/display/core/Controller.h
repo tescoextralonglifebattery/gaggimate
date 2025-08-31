@@ -6,9 +6,11 @@
 #include "PluginManager.h"
 #include "Settings.h"
 #include <WiFi.h>
-#include <display/core/Process.h>
 #include <display/core/ProfileManager.h>
+#include <display/core/process/Process.h>
+#ifndef GAGGIMATE_HEADLESS
 #include <display/ui/default/DefaultUI.h>
+#endif
 
 const IPAddress WIFI_AP_IP(4, 4, 4, 1); // the IP address the web server, Samsung requires the IP to be in public space
 const IPAddress WIFI_SUBNET_MASK(255, 255, 255, 0); // no need to change: https://avinetworks.com/glossary/subnet-mask/
@@ -25,18 +27,20 @@ class Controller {
     void loopControl();
 
     void setMode(int newMode);
-    void setTargetTemp(int temperature);
+    void setTargetTemp(float temperature);
     void setPressureScale();
+    void setPumpModelCoeffs();
     void setTargetDuration(int duration);
     void setTargetVolume(int volume);
     void setTargetGrindDuration(int duration);
     void setTargetGrindVolume(double volume);
 
     int getMode() const;
-    int getTargetTemp();
+
+    float getTargetTemp() const;
     int getTargetDuration() const;
     int getTargetGrindDuration() const;
-    virtual int getCurrentTemp() const { return currentTemp; }
+    virtual float getCurrentTemp() const { return currentTemp; }
     bool isActive() const;
     bool isGrindActive() const;
     bool isUpdating() const;
@@ -44,6 +48,7 @@ class Controller {
     bool isReady() const;
     bool isVolumetricAvailable() const;
     virtual float getTargetPressure() const { return targetPressure; }
+    virtual float getTargetFlow() const { return targetFlow; }
     virtual float getCurrentPressure() const { return pressure; }
     virtual float getCurrentPuckFlow() const { return currentPuckFlow; }
     virtual float getCurrentPumpFlow() const { return currentPumpFlow; }
@@ -54,7 +59,9 @@ class Controller {
     Process *getLastProcess() const { return lastProcess; }
     Settings &getSettings() { return settings; }
     ProfileManager *getProfileManager() { return profileManager; }
+#ifndef GAGGIMATE_HEADLESS
     DefaultUI *getUI() const { return ui; }
+#endif
     bool isErrorState() const { return error > 0; }
     int getError() const { return error; }
 
@@ -79,6 +86,13 @@ class Controller {
     void onVolumetricMeasurement(double measurement, VolumetricMeasurementSource source);
     void setVolumetricOverride(bool override) { volumetricOverride = override; }
     void onFlush();
+    int getWaterLevel() const {
+        float reversedLevel = static_cast<float>(settings.getEmptyTankDistance()) -
+                              static_cast<float>(std::min(settings.getEmptyTankDistance(), tofDistance));
+        return static_cast<int>((reversedLevel - settings.getFullTankDistance()) /
+                                static_cast<float>(settings.getEmptyTankDistance() - settings.getFullTankDistance()) * 100.0f);
+    };
+    bool isLowWaterLevel() const { return getWaterLevel() < 20; };
 
     SystemInfo getSystemInfo() const { return systemInfo; }
 
@@ -105,7 +119,9 @@ class Controller {
     void handleProfileUpdate();
 
     // Private Attributes
+#ifndef GAGGIMATE_HEADLESS
     DefaultUI *ui = nullptr;
+#endif
     NimBLEClientController clientController;
     hw_timer_t *timer = nullptr;
     Settings settings;
@@ -113,11 +129,13 @@ class Controller {
     ProfileManager *profileManager{};
 
     int mode = MODE_BREW;
-    int currentTemp = 0;
+    float currentTemp = 0;
     float pressure = 0.0f;
     float targetPressure = 0.0f;
     float currentPuckFlow = 0.0f;
     float currentPumpFlow = 0.0f;
+    float targetFlow = 0.0f;
+    int tofDistance = 0;
 
     SystemInfo systemInfo{};
 

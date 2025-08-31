@@ -2,11 +2,12 @@ export function parseHistoryData(shot) {
   const data = {
     id: shot.id,
   };
+  if (!shot.history) return null;
   const lines = shot.history.split('\n');
   const header = lines[0].split(',');
   data['version'] = header[0];
   data['profile'] = header[1];
-  data['timestamp'] = parseInt(header[2]);
+  data['timestamp'] = parseInt(header[2], 10);
   data['samples'] = [];
   for (let i = 1; i < lines.length; i++) {
     if (!lines[i]) {
@@ -14,7 +15,7 @@ export function parseHistoryData(shot) {
     }
     const numbers = lines[i].split(',');
     data['samples'].push({
-      t: parseInt(numbers[0]),
+      t: parseInt(numbers[0], 10),
       tt: parseFloat(numbers[1]),
       ct: parseFloat(numbers[2]),
       tp: parseFloat(numbers[3]),
@@ -25,6 +26,7 @@ export function parseHistoryData(shot) {
       vf: parseFloat(numbers[8]),
       v: parseFloat(numbers[9]),
       ev: parseFloat(numbers[10]),
+      pr: parseFloat(numbers[11]),
     });
   }
 
@@ -33,5 +35,10 @@ export function parseHistoryData(shot) {
     data.duration = lastSample.t;
     data.volume = lastSample.v;
   }
+  
+  if (shot.notes) {
+    data.notes = shot.notes;
+  }
+  
   return data;
 }
